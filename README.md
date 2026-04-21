@@ -1,51 +1,120 @@
-# Local MVP Video Editor (Flask + Vue 3 + FFmpeg)
+# Local MVP Video Editor (Flask + Vue + FFmpeg)
 
-This project is a local MVP video editor proof-of-concept.
+This project provides a local-only MVP workflow:
+1. Upload a video in Vue.
+2. Send it to Flask.
+3. Flask calls ffmpeg to trim from **25s to 120s**.
+4. Flask returns the processed file path.
+5. Vue displays a clickable download link.
 
-## MVP behavior
-- Accept a video upload.
-- Run the “magic”: keep only the first **120 seconds** using `ffmpeg`.
-- Show the processed video in the browser.
-- Store uploaded and processed files on local disk.
+## 1) Pre-requisites
 
-## Stack
-- **Backend:** Flask (Python)
-- **Frontend:** Vue.js 3 (Composition API, CDN build)
-- **Processing:** FFmpeg (must be in PATH)
-- **Storage:** Local filesystem (`storage/uploads`, `storage/outputs`)
+### Python
+- Python 3.10+ recommended.
+- Check:
+  ```bash
+  python --version
+  ```
 
-## Run locally
-1. Create and activate a virtual environment.
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. Start the app:
-   ```bash
-   python app.py
-   ```
-4. Open:
-   - `http://localhost:5000`
+### Node.js / npm
+- Node.js 18+ recommended.
+- Check:
+  ```bash
+  node --version
+  npm --version
+  ```
 
-## API
-### `POST /api/process`
-- Form field: `video`
-- Returns JSON with:
-  - `output_url`
-  - `output_filename`
-  - `trim_duration_seconds`
+### FFmpeg
+- Must be installed and available in your PATH.
+- Check:
+  ```bash
+  ffmpeg -version
+  ```
 
-Example response:
+---
+
+## 2) Backend setup (Flask)
+
+From project root:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+Equivalent explicit install command:
+
+```bash
+pip install Flask flask-cors
+```
+
+Start backend with Flask:
+
+```bash
+export FLASK_APP=app.py
+flask run --host 0.0.0.0 --port 5000
+```
+
+Backend runs at:
+- `http://localhost:5000`
+
+---
+
+## 3) Frontend setup (Vue)
+
+In a second terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Frontend runs at:
+- `http://localhost:5173` (default Vite port)
+
+---
+
+## 4) End-to-end workflow
+
+1. **User clicks/selects a file** in the Vue `<input type="file" accept="video/*">`.
+2. Vue `handleFileChange` stores the file in component state.
+3. User clicks **Process Video**.
+4. Vue sets `status = 'processing'` and sends `FormData` to:
+   - `POST http://localhost:5000/process_video`
+5. Flask receives `request.files['video']`, saves it to `temp/`.
+6. Flask calls ffmpeg via `subprocess.run(...)` to trim from 25s to 120s.
+7. Flask writes output into `output/`.
+8. Flask responds with JSON:
+   - `{ "trimmed_video_path": "/output/<filename>.mp4" }`
+9. Vue sets `status = 'complete'`, builds a download URL, and renders a clickable link.
+10. User clicks the link to open/download the processed video.
+
+---
+
+## 5) API Contract
+
+### `POST /process_video`
+- Content type: `multipart/form-data`
+- Required field: `video`
+
+Success response example:
+
 ```json
 {
-  "message": "Video processed successfully.",
-  "original_filename": "sample.mp4",
-  "output_filename": "<job_id>_trimmed.mp4",
-  "output_url": "/outputs/<job_id>_trimmed.mp4",
-  "trim_duration_seconds": 120
+  "trimmed_video_path": "/output/trimmed_abcd1234.mp4"
 }
 ```
 
-## Notes
-- Large files are supported up to ~2GB (`MAX_CONTENT_LENGTH`).
-- Output is encoded to H.264/AAC for broad compatibility.
+Error response example:
+
+```json
+{
+  "error": "ffmpeg execution failed: ..."
+}
+```
+
+### `GET /output/<filename>`
+- Serves processed output video file.
