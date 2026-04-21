@@ -5,21 +5,22 @@ import subprocess
 import uuid
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory
 from werkzeug.utils import secure_filename
 
 BASE_DIR = Path(__file__).resolve().parent
-UPLOAD_DIR = BASE_DIR / "storage" / "uploads"
-OUTPUT_DIR = BASE_DIR / "storage" / "outputs"
+TEMP_DIR = BASE_DIR / "temp"
+OUTPUT_DIR = BASE_DIR / "output"
 
 ALLOWED_EXTENSIONS = {"mp4", "mov", "mkv", "avi", "webm", "m4v"}
 MAX_CONTENT_LENGTH = 2 * 1024 * 1024 * 1024  # 2GB
-TRIM_DURATION_SECONDS = 120
+TRIM_START_SECONDS = 25
+TRIM_END_SECONDS = 120
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+TEMP_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -27,14 +28,16 @@ def is_allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-def run_ffmpeg_trim(input_path: Path, output_path: Path) -> None:
+def trim_video_with_ffmpeg(input_path: Path, output_path: Path) -> None:
     command = [
         "ffmpeg",
         "-y",
+        "-ss",
+        str(TRIM_START_SECONDS),
+        "-to",
+        str(TRIM_END_SECONDS),
         "-i",
         str(input_path),
-        "-t",
-        str(TRIM_DURATION_SECONDS),
         "-c:v",
         "libx264",
         "-preset",
@@ -53,56 +56,47 @@ def run_ffmpeg_trim(input_path: Path, output_path: Path) -> None:
     )
 
     if completed.returncode != 0:
-        raise RuntimeError(f"ffmpeg failed: {completed.stderr.strip()}")
+        error_details = completed.stderr.strip() or "Unknown ffmpeg error"
+        raise RuntimeError(error_details)
 
 
-@app.get("/")
-def index() -> str:
-    return render_template("index.html", trim_duration=TRIM_DURATION_SECONDS)
-
-
-@app.post("/api/process")
+@app.post("/process_video")
 def process_video():
     if "video" not in request.files:
-        return jsonify({"error": "No file part named 'video' provided."}), 400
+        return jsonify({"error": "Missing required file field: request.files['video']"}), 400
 
-    file = request.files["video"]
+    video_file = request.files["video"]
 
-    if file.filename == "":
-        return jsonify({"error": "No file selected."}), 400
+    if video_file.filename == "":
+        return jsonify({"error": "No video file selected."}), 400
 
-    if not is_allowed_file(file.filename):
-        return jsonify({"error": "Unsupported file type."}), 400
+    if not is_allowed_file(video_file.filename):
+        return jsonify({"error": "Unsupported video file type."}), 400
 
-    safe_name = secure_filename(file.filename)
-    job_id = uuid.uuid4().hex
+    safe_name = secure_filename(video_file.filename)
+    upload_id = uuid.uuid4().hex
 
-    input_path = UPLOAD_DIR / f"{job_id}_{safe_name}"
-    output_name = f"{job_id}_trimmed.mp4"
-    output_path = OUTPUT_DIR / output_name
+    temp_input_path = TEMP_DIR / f"{upload_id}_{safe_name}"
+    trimmed_filename = f"trimmed_{upload_id}.mp4"
+    output_path = OUTPUT_DIR / trimmed_filename
 
     try:
-        file.save(input_path)
-        run_ffmpeg_trim(input_path, output_path)
-    except Exception as exc:
-        if input_path.exists():
-            input_path.unlink(missing_ok=True)
+        video_file.save(temp_input_path)
+        trim_video_with_ffmpeg(temp_input_path, output_path)
+    except RuntimeError as exc:
         output_path.unlink(missing_ok=True)
-        return jsonify({"error": str(exc)}), 500
+        return jsonify({"error": f"ffmpeg execution failed: {exc}"}), 500
+    except Exception as exc:
+        output_path.unlink(missing_ok=True)
+        return jsonify({"error": f"Unexpected processing error: {exc}"}), 500
+    finally:
+        temp_input_path.unlink(missing_ok=True)
 
-    return jsonify(
-        {
-            "message": "Video processed successfully.",
-            "original_filename": safe_name,
-            "output_filename": output_name,
-            "output_url": f"/outputs/{output_name}",
-            "trim_duration_seconds": TRIM_DURATION_SECONDS,
-        }
-    )
+    return jsonify({"trimmed_video_path": f"/output/{trimmed_filename}"}), 200
 
 
-@app.get("/outputs/<path:filename>")
-def get_output_file(filename: str):
+@app.get("/output/<path:filename>")
+def download_output(filename: str):
     return send_from_directory(OUTPUT_DIR, filename, as_attachment=False)
 
 
