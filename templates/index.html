@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Local MVP Video Editor</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 2rem;
+      background: #f7f8fb;
+      color: #1f2937;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 12px;
+      padding: 1.5rem;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+    }
+
+    h1 {
+      margin-top: 0;
+    }
+
+    .row {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+
+    button {
+      background: #2563eb;
+      color: white;
+      border: 0;
+      border-radius: 8px;
+      padding: 0.7rem 1rem;
+      cursor: pointer;
+      font-size: 0.95rem;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .error {
+      color: #b91c1c;
+      margin: 0.6rem 0;
+    }
+
+    .success {
+      color: #166534;
+      margin: 0.6rem 0;
+    }
+
+    video {
+      width: 100%;
+      margin-top: 0.8rem;
+      border-radius: 10px;
+      background: black;
+    }
+
+    .card {
+      margin-top: 1rem;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 1rem;
+      background: #fafafa;
+    }
+  </style>
+</head>
+<body>
+  <div id="app" class="container">
+    <h1>MVP Local Video Editor</h1>
+    <p>
+      Upload a video to apply the MVP “magic”: keep only the first
+      <strong>{{ trimDuration }}</strong> seconds.
+    </p>
+
+    <div class="row">
+      <input type="file" accept="video/*" @change="onFileChange" />
+      <button :disabled="!selectedFile || isProcessing" @click="processVideo">
+        {{ isProcessing ? 'Processing…' : 'Upload & Trim' }}
+      </button>
+    </div>
+
+    <p class="error" v-if="errorMessage">{{ errorMessage }}</p>
+    <p class="success" v-if="successMessage">{{ successMessage }}</p>
+
+    <div class="card" v-if="previewUrl">
+      <h3>Selected Video Preview</h3>
+      <video :src="previewUrl" controls></video>
+    </div>
+
+    <div class="card" v-if="outputUrl">
+      <h3>Processed Output</h3>
+      <video :src="outputUrl" controls></video>
+      <p>
+        <a :href="outputUrl" target="_blank" rel="noopener">Open output in new tab</a>
+      </p>
+    </div>
+  </div>
+
+  <script>
+    const { createApp, ref } = Vue;
+
+    createApp({
+      setup() {
+        const trimDuration = {{ trim_duration }};
+        const selectedFile = ref(null);
+        const previewUrl = ref('');
+        const outputUrl = ref('');
+        const isProcessing = ref(false);
+        const errorMessage = ref('');
+        const successMessage = ref('');
+
+        const onFileChange = (event) => {
+          const file = event.target.files?.[0] ?? null;
+          selectedFile.value = file;
+          outputUrl.value = '';
+          successMessage.value = '';
+          errorMessage.value = '';
+
+          if (previewUrl.value) {
+            URL.revokeObjectURL(previewUrl.value);
+          }
+
+          previewUrl.value = file ? URL.createObjectURL(file) : '';
+        };
+
+        const processVideo = async () => {
+          if (!selectedFile.value) {
+            errorMessage.value = 'Please select a file first.';
+            return;
+          }
+
+          isProcessing.value = true;
+          errorMessage.value = '';
+          successMessage.value = '';
+          outputUrl.value = '';
+
+          const formData = new FormData();
+          formData.append('video', selectedFile.value);
+
+          try {
+            const response = await fetch('/api/process', {
+              method: 'POST',
+              body: formData,
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+              throw new Error(data.error || 'Processing failed.');
+            }
+
+            outputUrl.value = data.output_url;
+            successMessage.value = `Done. Created trimmed output (${data.trim_duration_seconds}s).`;
+          } catch (error) {
+            errorMessage.value = error.message || 'Unexpected error during processing.';
+          } finally {
+            isProcessing.value = false;
+          }
+        };
+
+        return {
+          trimDuration,
+          selectedFile,
+          previewUrl,
+          outputUrl,
+          isProcessing,
+          errorMessage,
+          successMessage,
+          onFileChange,
+          processVideo,
+        };
+      },
+    }).mount('#app');
+  </script>
+</body>
+</html>
