@@ -1,7 +1,7 @@
 <template>
   <section class="video-editor">
-    <h1>Local MVP Video Editor</h1>
-    <p>Upload a video and trim it from 25s to 120s using the backend service.</p>
+    <h1>Phase 1: Time-Based MVP</h1>
+    <p>Detect scene changes, review timestamps, then generate a hype reel.</p>
 
     <input
       type="file"
@@ -10,20 +10,35 @@
       :disabled="status === 'processing'"
     />
 
-    <button @click="processVideo" :disabled="!selectedFile || status === 'processing'">
-      {{ status === 'processing' ? 'Processing...' : 'Process Video' }}
-    </button>
+    <div class="button-row">
+      <button @click="detectScenes" :disabled="!selectedFile || status === 'processing'">
+        Detect Scenes
+      </button>
+
+      <button @click="generateHypeReel" :disabled="!videoId || scenes.length === 0 || status === 'processing'">
+        Generate Hype Reel
+      </button>
+    </div>
 
     <div class="status-area">
-      <p v-if="status === 'idle'">Status: Idle. Select a video to begin.</p>
-      <p v-else-if="status === 'processing'">Status: Processing your video...</p>
+      <p v-if="status === 'idle'">Status: Idle</p>
+      <p v-else-if="status === 'processing'">Status: Processing...</p>
       <p v-else-if="status === 'complete'" class="success">{{ statusMessage }}</p>
       <p v-else-if="status === 'error'" class="error">{{ statusMessage }}</p>
+    </div>
 
-      <p v-if="downloadUrl">
-        Download result:
-        <a :href="downloadUrl" target="_blank" rel="noopener">{{ downloadUrl }}</a>
-      </p>
+    <div v-if="scenes.length > 0" class="scene-list">
+      <h3>Detected Scene Timestamps</h3>
+      <ul>
+        <li v-for="(scene, index) in scenes" :key="`${scene.start}-${scene.end}-${index}`">
+          Scene {{ index + 1 }}: {{ formatSeconds(scene.start) }}s → {{ formatSeconds(scene.end) }}s
+        </li>
+      </ul>
+    </div>
+
+    <div v-if="downloadUrl" class="result-box">
+      <h3>Hype Reel Ready</h3>
+      <a :href="downloadUrl" target="_blank" rel="noopener">Download / Open result</a>
     </div>
   </section>
 </template>
@@ -32,6 +47,8 @@
 import { ref } from 'vue'
 
 const selectedFile = ref(null)
+const videoId = ref('')
+const scenes = ref([])
 const status = ref('idle') // idle | processing | complete | error
 const statusMessage = ref('')
 const downloadUrl = ref('')
@@ -39,12 +56,14 @@ const downloadUrl = ref('')
 const handleFileChange = (event) => {
   const file = event.target.files?.[0] ?? null
   selectedFile.value = file
+  videoId.value = ''
+  scenes.value = []
+  downloadUrl.value = ''
   status.value = 'idle'
   statusMessage.value = ''
-  downloadUrl.value = ''
 }
 
-const processVideo = async () => {
+const detectScenes = async () => {
   if (!selectedFile.value) {
     status.value = 'error'
     statusMessage.value = 'Please select a video file first.'
@@ -54,38 +73,75 @@ const processVideo = async () => {
   status.value = 'processing'
   statusMessage.value = ''
   downloadUrl.value = ''
+  scenes.value = []
 
   const formData = new FormData()
   formData.append('video', selectedFile.value)
 
   try {
-    const response = await fetch('http://localhost:5000/process_video', {
+    const response = await fetch('http://localhost:5000/analyze_scenes', {
       method: 'POST',
       body: formData,
     })
 
     const payload = await response.json()
-
     if (!response.ok) {
-      throw new Error(payload.error || 'Video processing failed.')
+      throw new Error(payload.error || 'Scene detection failed.')
     }
 
-    const backendPath = payload.trimmed_video_path
-    const absoluteUrl = `http://localhost:5000${backendPath}`
-
+    videoId.value = payload.video_id
+    scenes.value = Array.isArray(payload.scenes) ? payload.scenes : []
     status.value = 'complete'
-    statusMessage.value = 'Video processed successfully.'
-    downloadUrl.value = absoluteUrl
+    statusMessage.value = `Detected ${scenes.value.length} scene(s).`
   } catch (error) {
     status.value = 'error'
-    statusMessage.value = error.message || 'Unexpected error during processing.'
+    statusMessage.value = error.message || 'Unexpected error while detecting scenes.'
   }
 }
+
+const generateHypeReel = async () => {
+  if (!videoId.value || scenes.value.length === 0) {
+    status.value = 'error'
+    statusMessage.value = 'Detect scenes first before generating the hype reel.'
+    return
+  }
+
+  status.value = 'processing'
+  statusMessage.value = ''
+  downloadUrl.value = ''
+
+  try {
+    const response = await fetch('http://localhost:5000/smart_cut', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        video_id: videoId.value,
+        scenes: scenes.value,
+      }),
+    })
+
+    const payload = await response.json()
+    if (!response.ok) {
+      throw new Error(payload.error || 'Hype reel generation failed.')
+    }
+
+    downloadUrl.value = `http://localhost:5000${payload.hype_reel_path}`
+    status.value = 'complete'
+    statusMessage.value = 'Hype reel generated successfully.'
+  } catch (error) {
+    status.value = 'error'
+    statusMessage.value = error.message || 'Unexpected error while generating hype reel.'
+  }
+}
+
+const formatSeconds = (value) => Number(value).toFixed(3)
 </script>
 
 <style scoped>
 .video-editor {
-  max-width: 720px;
+  max-width: 800px;
   margin: 2rem auto;
   padding: 1.25rem;
   border: 1px solid #e5e7eb;
@@ -93,10 +149,10 @@ const processVideo = async () => {
   font-family: Arial, sans-serif;
 }
 
-input,
-button {
-  display: block;
+.button-row {
   margin-top: 1rem;
+  display: flex;
+  gap: 0.75rem;
 }
 
 button {
@@ -115,6 +171,14 @@ button:disabled {
 
 .status-area {
   margin-top: 1rem;
+}
+
+.scene-list,
+.result-box {
+  margin-top: 1rem;
+  padding: 0.75rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
 }
 
 .success {
