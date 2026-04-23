@@ -1,0 +1,32 @@
+from __future__ import annotations
+
+import logging
+import os
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+TEMP_DIR = BASE_DIR / "temp"
+OUTPUT_DIR = BASE_DIR / "output"
+
+ALLOWED_EXTENSIONS = {"mp4", "mov", "mkv", "avi", "webm", "m4v"}
+MAX_CONTENT_LENGTH = 2 * 1024 * 1024 * 1024  # 2GB
+SCENE_DIFF_THRESHOLD = 0.62
+ANALYSIS_SAMPLE_SECONDS = 0.45
+ANALYSIS_RESOLUTION = (320, 180)
+HIGHLIGHT_SECONDS = 2.0
+MIN_SCENE_SECONDS = 1.75
+MAX_DETECTED_SCENES = 180
+MAX_HIGHLIGHT_SCENES = 80
+MOMENT_WINDOW_SECONDS = 5.0
+MOMENT_SCORE_THRESHOLD = 2
+SCENE_SNAP_TOLERANCE_SECONDS = 12.0
+CHUNK_SECONDS = 60
+CHUNK_OVERLAP_SECONDS = 5
+CHUNK_WORKERS = 2
+SEMANTIC_WINDOW_SECONDS = 45.0
+LLM_SEMANTIC_MODEL = os.getenv("HIGHLIGHT_LLM_MODEL", "gpt-4.1-mini")
+LLM_TIMEOUT_SECONDS = int(os.getenv("HIGHLIGHT_LLM_TIMEOUT_SECONDS", "30"))
+LLM_MAX_WINDOWS = 24
+PORT = int(os.environ.get("PORT", "5000"))
+
+logging.basicConfig(level=logging.INFO)

@@ -1,3 +1,25 @@
+# Modular Architecture
+
+The backend is now split into focused modules so `app.py` stays as the HTTP entrypoint and route layer only.
+
+## Backend structure
+- `app.py`: Flask app setup, CORS, and HTTP routes only.
+- `config.py`: Centralized constants, directory paths, and environment-backed settings.
+- `core/processor.py`: Background threading, job state management, and cross-service orchestration for scenes, captions, and key moments.
+- `core/utils.py`: General helpers for cleanup, file validation, upload persistence, boolean parsing, formatting, and safe user-facing error messages.
+- `services/vision.py`: OpenCV-based scene detection and frame signature analysis.
+- `services/audio.py`: Librosa-based audio peaks, pitch variance, speech-rate analysis, and final key-moment scoring.
+- `services/transcription.py`: Whisper device selection, CUDA capability checks, model loading, and chunk-aware transcription helpers.
+- `services/semantic.py`: Transcript window building plus OpenAI-powered or keyword-fallback semantic scoring.
+- `engine/ffmpeg_tools.py`: FFmpeg and ffprobe subprocess utilities for extract, split, burn, stitch, duration probing, and SRT generation.
+
+## Request flow
+1. `app.py` validates the incoming request and saves uploads.
+2. `core/processor.py` creates a background job and coordinates the pipeline.
+3. `services/*` modules perform domain-specific analysis.
+4. `engine/ffmpeg_tools.py` handles media transforms.
+5. Route polling reads job state through `/job_status/<job_id>`.
+
 # Phase 1: Time-Based MVP (Flask + Vue + OpenCV + FFmpeg)
 
 ## What this phase adds
