@@ -36,13 +36,25 @@
       </section>
 
       <section class="controls">
-        <label class="device-select">
-          <span>Whisper</span>
-          <select v-model="whisperDevice" :disabled="isProcessing">
-            <option value="cpu">CPU</option>
-            <option value="gpu">GPU</option>
-          </select>
-        </label>
+        <div class="whisper-controls">
+          <label class="device-select">
+            <span>Whisper</span>
+            <select v-model="whisperDevice" :disabled="isProcessing">
+              <option value="cpu">CPU</option>
+              <option value="gpu" :disabled="!gpuAvailable">{{ gpuOptionLabel }}</option>
+            </select>
+          </label>
+          <label class="chunking-toggle" :class="{ disabled: isProcessing }">
+            <input v-model="smartChunking" type="checkbox" :disabled="isProcessing" />
+            <span>Smart Chunking</span>
+          </label>
+          <p class="device-hint" :class="{ warning: !gpuAvailable }">
+            {{ deviceHint }}
+          </p>
+          <p class="chunking-hint">
+            {{ chunkingHint }}
+          </p>
+        </div>
 
         <button @click="detectScenes" :disabled="!selectedFile || isProcessing">
           Detect Scenes
@@ -158,7 +170,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 const API_BASE = 'http://localhost:5000'
 
@@ -173,6 +185,8 @@ const srtUrl = ref('')
 const captionSegments = ref([])
 const keyMoments = ref([])
 const whisperDevice = ref('cpu')
+const smartChunking = ref(true)
+const whisperCapabilities = ref(null)
 const progress = ref(0)
 const activeJobType = ref('')
 const isDragging = ref(false)
@@ -182,6 +196,29 @@ const isProcessing = computed(() => status.value === 'processing')
 const canGenerate = computed(() => Boolean(videoId.value && scenes.value.length > 0 && !isProcessing.value))
 const canGenerateCaptions = computed(() => Boolean(selectedFile.value && !isProcessing.value))
 const displayedProgress = computed(() => Math.round(progress.value))
+const gpuRuntime = computed(() => whisperCapabilities.value?.devices?.gpu ?? null)
+const gpuAvailable = computed(() => Boolean(gpuRuntime.value?.available))
+const gpuOptionLabel = computed(() => {
+  if (!whisperCapabilities.value) return 'GPU (checking...)'
+  return gpuAvailable.value ? 'GPU (CUDA)' : 'GPU unavailable'
+})
+const deviceHint = computed(() => {
+  if (!whisperCapabilities.value) {
+    return 'Checking whether CUDA acceleration is available on this machine.'
+  }
+  if (gpuAvailable.value) {
+    const names = gpuRuntime.value.device_names || []
+    return names.length > 0
+      ? `CUDA ready: ${names.join(', ')}`
+      : (gpuRuntime.value.reason || 'CUDA is available for Whisper.')
+  }
+  return gpuRuntime.value?.reason || 'GPU mode is not available right now.'
+})
+const chunkingHint = computed(() => (
+  smartChunking.value
+    ? 'Long Whisper runs will split the video into timed chunks for steadier progress updates.'
+    : 'Whisper will process the full audio in one pass. This is simpler, but progress updates will be less detailed.'
+))
 const statusLabel = computed(() => {
   if (status.value === 'processing') return 'Processing'
   if (status.value === 'complete') return 'Complete'
@@ -362,12 +399,13 @@ const detectKeyMoments = async () => {
   status.value = 'processing'
   activeJobType.value = 'key_moments'
   progress.value = 4
-  statusMessage.value = `Uploading video for key moment detection on ${whisperDevice.value.toUpperCase()}`
+  statusMessage.value = `Uploading video for key moment detection on ${whisperDevice.value.toUpperCase()}${smartChunking.value ? ' with smart chunking' : ''}`
   keyMoments.value = []
 
   const formData = new FormData()
   formData.append('video', selectedFile.value)
   formData.append('device', whisperDevice.value)
+  formData.append('use_chunking', String(smartChunking.value))
 
   try {
     const payload = await startRequest('/detect_key_moments', {
@@ -432,7 +470,7 @@ const generateCaptions = async () => {
   status.value = 'processing'
   activeJobType.value = 'captions'
   progress.value = 4
-  statusMessage.value = 'Uploading video for captions'
+  statusMessage.value = `Uploading video for captions on ${whisperDevice.value.toUpperCase()}${smartChunking.value ? ' with smart chunking' : ''}`
   captionedUrl.value = ''
   srtUrl.value = ''
   captionSegments.value = []
@@ -440,6 +478,7 @@ const generateCaptions = async () => {
   const formData = new FormData()
   formData.append('video', selectedFile.value)
   formData.append('device', whisperDevice.value)
+  formData.append('use_chunking', String(smartChunking.value))
 
   try {
     const payload = await startRequest('/generate_captions', {
@@ -468,6 +507,29 @@ const startRequest = async (path, options) => {
     throw new Error(payload.error || 'Request failed.')
   }
   return payload
+}
+
+const loadWhisperCapabilities = async () => {
+  try {
+    const response = await fetch(`${API_BASE}/whisper_capabilities`)
+    const payload = await response.json()
+    if (!response.ok) throw new Error(payload.error || 'Capability check failed.')
+    whisperCapabilities.value = payload
+    if (!payload.devices?.gpu?.available && whisperDevice.value === 'gpu') {
+      whisperDevice.value = 'cpu'
+    }
+  } catch (error) {
+    whisperCapabilities.value = {
+      devices: {
+        gpu: {
+          available: false,
+          reason: error.message || 'Unable to verify CUDA availability.',
+          device_names: [],
+        },
+      },
+    }
+    whisperDevice.value = 'cpu'
+  }
 }
 
 const waitForJob = (jobId, onComplete) => new Promise((resolve, reject) => {
@@ -522,6 +584,10 @@ const sceneStyle = (scene, index) => {
 }
 
 const formatSeconds = (value) => Number(value).toFixed(3)
+
+onMounted(() => {
+  loadWhisperCapabilities()
+})
 </script>
 
 <style scoped>
@@ -747,6 +813,49 @@ button.quaternary {
   background: rgba(30, 41, 59, 0.8);
   color: #cbd5e1;
   font-weight: 800;
+}
+
+.whisper-controls {
+  display: grid;
+  gap: 8px;
+}
+
+.chunking-toggle {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: rgba(30, 41, 59, 0.8);
+  color: #cbd5e1;
+  font-weight: 800;
+}
+
+.chunking-toggle.disabled {
+  opacity: 0.6;
+}
+
+.chunking-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: #14b8a6;
+}
+
+.device-hint {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.82rem;
+}
+
+.chunking-hint {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.82rem;
+}
+
+.device-hint.warning {
+  color: #fbbf24;
 }
 
 .device-select span {

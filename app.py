@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import logging
 import os
 import json
 import shutil
 import subprocess
 import threading
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
 from urllib import error, request as urllib_request
@@ -43,6 +44,7 @@ LLM_MAX_WINDOWS = 24
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 CORS(app)
+logging.basicConfig(level=logging.INFO)
 
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -80,6 +82,24 @@ def is_allowed_file(filename: str) -> bool:
 def format_duration(seconds: float) -> str:
     minutes, remaining_seconds = divmod(max(0, int(seconds)), 60)
     return f"{minutes}:{remaining_seconds:02d}"
+
+
+def friendly_error_message(exc: Exception, fallback: str) -> str:
+    raw = str(exc).strip()
+    if not raw:
+        return fallback
+
+    lower = raw.lower()
+    if raw.startswith("Linear(") or raw.startswith("Conv") or raw.startswith("Sequential("):
+        return fallback
+    if "in_features=" in raw and "out_features=" in raw:
+        return fallback
+    if "cuda" in lower and ("not available" in lower or "not compiled" in lower or "driver" in lower):
+        return raw
+    if "out of memory" in lower:
+        return "GPU ran out of memory while running Whisper. Try CPU mode or a smaller input."
+
+    return raw
 
 
 def frame_signature(frame) -> Any:
@@ -172,10 +192,77 @@ def ensure_whisper_device_available(device: str) -> None:
     if device != "cuda":
         return
 
-    import torch
+    runtime = get_whisper_capabilities()
+    if not runtime["devices"]["gpu"]["available"]:
+        raise RuntimeError(runtime["devices"]["gpu"]["reason"])
 
-    if not torch.cuda.is_available():
-        raise RuntimeError("GPU mode was requested, but CUDA is not available on this machine.")
+
+def get_whisper_capabilities() -> dict[str, Any]:
+    capabilities: dict[str, Any] = {
+        "default_device": "cpu",
+        "devices": {
+            "cpu": {
+                "available": True,
+                "label": "CPU",
+                "reason": "CPU inference is always available.",
+            },
+            "gpu": {
+                "available": False,
+                "label": "GPU (CUDA)",
+                "reason": "CUDA support could not be verified yet.",
+                "backend": "cuda",
+                "device_count": 0,
+                "device_names": [],
+            },
+        },
+        "torch": {
+            "installed": False,
+            "version": None,
+        },
+    }
+
+    try:
+        import torch
+    except Exception as exc:
+        capabilities["devices"]["gpu"]["reason"] = f"PyTorch is unavailable: {exc}"
+        return capabilities
+
+    capabilities["torch"]["installed"] = True
+    capabilities["torch"]["version"] = getattr(torch, "__version__", None)
+
+    try:
+        cuda_available = bool(torch.cuda.is_available())
+    except Exception as exc:
+        capabilities["devices"]["gpu"]["reason"] = f"CUDA check failed: {exc}"
+        return capabilities
+
+    if not cuda_available:
+        capabilities["devices"]["gpu"]["reason"] = (
+            "GPU mode was requested, but CUDA is not available on this machine."
+        )
+        return capabilities
+
+    try:
+        device_count = int(torch.cuda.device_count())
+    except Exception:
+        device_count = 0
+
+    device_names: list[str] = []
+    for index in range(device_count):
+        try:
+            device_names.append(torch.cuda.get_device_name(index))
+        except Exception:
+            device_names.append(f"CUDA device {index}")
+
+    capabilities["devices"]["gpu"].update(
+        {
+            "available": True,
+            "reason": f"CUDA is available with {device_count} GPU(s).",
+            "device_count": device_count,
+            "device_names": device_names,
+        }
+    )
+    return capabilities
 
 
 def load_whisper_model(device: str = "cpu") -> Any:
@@ -189,6 +276,12 @@ def load_whisper_model(device: str = "cpu") -> Any:
             WHISPER_MODELS[device] = whisper.load_model("base", device=device)
 
         return WHISPER_MODELS[device]
+
+
+def format_chunk_label(chunk: dict[str, Any], total_chunks: int) -> str:
+    start_label = format_duration(float(chunk["start"]))
+    end_label = format_duration(float(chunk["end"]))
+    return f"chunk {int(chunk['index']) + 1}/{total_chunks} ({start_label}-{end_label})"
 
 
 def create_processing_job(job_type: str) -> str:
@@ -933,11 +1026,21 @@ def detect_key_moment_clusters(
     return moments
 
 
-def process_chunk_captions(chunk: dict[str, Any], whisper_device: str) -> dict[str, Any]:
+def process_chunk_captions(
+    chunk: dict[str, Any],
+    whisper_device: str,
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
     audio_path = TEMP_DIR / f"{chunk['path'].stem}.mp3"
     try:
+        if progress_callback:
+            progress_callback("extracting audio")
         extract_audio_from_video(chunk["path"], audio_path)
+        if progress_callback:
+            progress_callback("loading Whisper")
         model = load_whisper_model(whisper_device)
+        if progress_callback:
+            progress_callback("transcribing speech")
         transcription = model.transcribe(str(audio_path), fp16=whisper_device == "cuda", verbose=False)
         segments = transcription.get("segments", [])
 
@@ -970,20 +1073,36 @@ def process_chunk_captions(chunk: dict[str, Any], whisper_device: str) -> dict[s
         audio_path.unlink(missing_ok=True)
 
 
-def process_chunk_key_moments(chunk: dict[str, Any], whisper_device: str) -> dict[str, Any]:
+def process_chunk_key_moments(
+    chunk: dict[str, Any],
+    whisper_device: str,
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
     audio_path = TEMP_DIR / f"{chunk['path'].stem}.wav"
     try:
+        if progress_callback:
+            progress_callback("extracting audio")
         extract_wav_audio_from_video(chunk["path"], audio_path)
+        if progress_callback:
+            progress_callback("analyzing peaks")
         audio_peaks = analyze_audio_peaks(audio_path)
         pitch_spikes = analyze_pitch_variance_spikes(audio_path)
 
+        if progress_callback:
+            progress_callback("loading Whisper")
         model = load_whisper_model(whisper_device)
+        if progress_callback:
+            progress_callback("transcribing speech")
         transcription = model.transcribe(str(audio_path), fp16=whisper_device == "cuda", verbose=False)
         transcript_segments = transcription.get("segments", [])
         speech_rate_spikes = calculate_speech_rate_spikes(transcript_segments, MOMENT_WINDOW_SECONDS)
+        if progress_callback:
+            progress_callback("detecting scene transitions")
         scenes = analyze_scene_changes(chunk["path"])
         scene_changes = [float(scene["start"]) for scene in scenes if float(scene["start"]) > 0]
         transcript_windows = build_transcript_windows(transcript_segments, float(chunk["duration"]))
+        if progress_callback:
+            progress_callback("scoring transcript windows")
         semantic_scores = score_transcript_windows_with_llm(transcript_windows)
         moments = detect_key_moment_clusters(
             float(chunk["duration"]),
@@ -1252,7 +1371,14 @@ def run_scene_analysis_job(job_id: str, video_id: str, input_path: Path) -> None
         )
     except Exception as exc:
         input_path.unlink(missing_ok=True)
-        update_processing_job(job_id, state="error", progress=100, message="Scene analysis failed", error=str(exc))
+        logging.exception("Scene analysis failed")
+        update_processing_job(
+            job_id,
+            state="error",
+            progress=100,
+            message="Scene analysis failed",
+            error=friendly_error_message(exc, "Scene analysis failed. Check the server logs for details."),
+        )
 
 
 def run_smart_cut_job(job_id: str, input_path: Path, scenes: list[dict[str, float]], video_id: str) -> None:
@@ -1280,7 +1406,14 @@ def run_smart_cut_job(job_id: str, input_path: Path, scenes: list[dict[str, floa
             result={"hype_reel_path": f"/output/{output_path.name}"},
         )
     except Exception as exc:
-        update_processing_job(job_id, state="error", progress=100, message="Smart cut failed", error=str(exc))
+        logging.exception("Smart cut failed")
+        update_processing_job(
+            job_id,
+            state="error",
+            progress=100,
+            message="Smart cut failed",
+            error=friendly_error_message(exc, "Smart cut failed. Check the server logs for details."),
+        )
 
 
 def run_caption_job(job_id: str, video_path: Path, video_id: str, whisper_device: str) -> None:
@@ -1319,7 +1452,18 @@ def run_caption_job(job_id: str, video_path: Path, video_id: str, whisper_device
             },
         )
     except Exception as exc:
-        update_processing_job(job_id, state="error", progress=100, message="Caption generation failed", error=str(exc))
+        logging.exception("Caption generation failed")
+        fallback = (
+            f"Whisper failed while generating captions on {device_label}. "
+            "Try CPU mode if GPU/CUDA is not configured correctly."
+        )
+        update_processing_job(
+            job_id,
+            state="error",
+            progress=100,
+            message="Caption generation failed",
+            error=friendly_error_message(exc, fallback),
+        )
     finally:
         audio_path.unlink(missing_ok=True)
 
@@ -1384,7 +1528,18 @@ def run_key_moment_job(job_id: str, video_path: Path, video_id: str, whisper_dev
             },
         )
     except Exception as exc:
-        update_processing_job(job_id, state="error", progress=100, message="Key moment detection failed", error=str(exc))
+        logging.exception("Key moment detection failed")
+        fallback = (
+            f"Whisper failed while detecting key moments on {device_label}. "
+            "Try CPU mode if GPU/CUDA is not configured correctly."
+        )
+        update_processing_job(
+            job_id,
+            state="error",
+            progress=100,
+            message="Key moment detection failed",
+            error=friendly_error_message(exc, fallback),
+        )
     finally:
         audio_path.unlink(missing_ok=True)
 
@@ -1406,13 +1561,50 @@ def run_chunked_caption_job(job_id: str, video_path: Path, video_id: str, whispe
 
         update_processing_job(job_id, state="processing", progress=18, message="Splitting video into smart chunks")
         chunk_defs = split_video(video_path, video_id)
+        for index, chunk in enumerate(chunk_defs):
+            chunk["index"] = index
 
-        update_processing_job(job_id, state="processing", progress=34, message=f"Processing {len(chunk_defs)} chunks on {device_label}")
+        update_processing_job(job_id, state="processing", progress=26, message=f"Loading Whisper base model on {device_label}")
+        load_whisper_model(whisper_device)
+
+        total_chunks = len(chunk_defs)
+        update_processing_job(
+            job_id,
+            state="processing",
+            progress=34,
+            message=f"Preparing {total_chunks} Whisper chunk(s) on {device_label}",
+        )
         with ThreadPoolExecutor(max_workers=CHUNK_WORKERS) as executor:
-            chunk_results = list(executor.map(lambda chunk: process_chunk_captions(chunk, whisper_device), chunk_defs))
+            future_to_chunk = {
+                executor.submit(
+                    process_chunk_captions,
+                    chunk,
+                    whisper_device,
+                    lambda stage, item=chunk: update_processing_job(
+                        job_id,
+                        state="processing",
+                        progress=38,
+                        message=f"Whisper {format_chunk_label(item, total_chunks)}: {stage}",
+                    ),
+                ): chunk
+                for chunk in chunk_defs
+            }
+            chunk_results: list[dict[str, Any] | None] = [None] * total_chunks
+            completed_chunks = 0
+            for future in as_completed(future_to_chunk):
+                chunk = future_to_chunk[future]
+                chunk_results[int(chunk["index"])] = future.result()
+                completed_chunks += 1
+                chunk_progress = 40 + (completed_chunks / total_chunks) * 28
+                update_processing_job(
+                    job_id,
+                    state="processing",
+                    progress=chunk_progress,
+                    message=f"Completed Whisper {format_chunk_label(chunk, total_chunks)}",
+                )
 
         update_processing_job(job_id, state="processing", progress=72, message="Merging caption overlaps")
-        merged = merge_results("captions", chunk_results)
+        merged = merge_results("captions", [result for result in chunk_results if result is not None])
         write_srt_file(merged["segments"], srt_path)
 
         update_processing_job(job_id, state="processing", progress=88, message="Burning merged captions into video")
@@ -1431,7 +1623,18 @@ def run_chunked_caption_job(job_id: str, video_path: Path, video_id: str, whispe
             },
         )
     except Exception as exc:
-        update_processing_job(job_id, state="error", progress=100, message="Chunked caption generation failed", error=str(exc))
+        logging.exception("Chunked caption generation failed")
+        fallback = (
+            f"Whisper failed while processing caption chunks on {device_label}. "
+            "Try CPU mode if GPU/CUDA is not configured correctly."
+        )
+        update_processing_job(
+            job_id,
+            state="error",
+            progress=100,
+            message="Chunked caption generation failed",
+            error=friendly_error_message(exc, fallback),
+        )
     finally:
         chunk_root = TEMP_DIR / f"{video_id}_chunks"
         if chunk_root.exists():
@@ -1453,13 +1656,50 @@ def run_chunked_key_moment_job(job_id: str, video_path: Path, video_id: str, whi
 
         update_processing_job(job_id, state="processing", progress=18, message="Splitting video into smart chunks")
         chunk_defs = split_video(video_path, video_id)
+        for index, chunk in enumerate(chunk_defs):
+            chunk["index"] = index
 
-        update_processing_job(job_id, state="processing", progress=34, message=f"Processing {len(chunk_defs)} chunks on {device_label}")
+        update_processing_job(job_id, state="processing", progress=26, message=f"Loading Whisper base model on {device_label}")
+        load_whisper_model(whisper_device)
+
+        total_chunks = len(chunk_defs)
+        update_processing_job(
+            job_id,
+            state="processing",
+            progress=34,
+            message=f"Preparing {total_chunks} key-moment chunk(s) on {device_label}",
+        )
         with ThreadPoolExecutor(max_workers=CHUNK_WORKERS) as executor:
-            chunk_results = list(executor.map(lambda chunk: process_chunk_key_moments(chunk, whisper_device), chunk_defs))
+            future_to_chunk = {
+                executor.submit(
+                    process_chunk_key_moments,
+                    chunk,
+                    whisper_device,
+                    lambda stage, item=chunk: update_processing_job(
+                        job_id,
+                        state="processing",
+                        progress=38,
+                        message=f"Whisper {format_chunk_label(item, total_chunks)}: {stage}",
+                    ),
+                ): chunk
+                for chunk in chunk_defs
+            }
+            chunk_results: list[dict[str, Any] | None] = [None] * total_chunks
+            completed_chunks = 0
+            for future in as_completed(future_to_chunk):
+                chunk = future_to_chunk[future]
+                chunk_results[int(chunk["index"])] = future.result()
+                completed_chunks += 1
+                chunk_progress = 40 + (completed_chunks / total_chunks) * 44
+                update_processing_job(
+                    job_id,
+                    state="processing",
+                    progress=chunk_progress,
+                    message=f"Completed Whisper {format_chunk_label(chunk, total_chunks)}",
+                )
 
         update_processing_job(job_id, state="processing", progress=84, message="Reconciling overlap windows")
-        merged = merge_results("moments", chunk_results)
+        merged = merge_results("moments", [result for result in chunk_results if result is not None])
 
         update_processing_job(
             job_id,
@@ -1469,7 +1709,18 @@ def run_chunked_key_moment_job(job_id: str, video_path: Path, video_id: str, whi
             result={**merged, "chunked": True},
         )
     except Exception as exc:
-        update_processing_job(job_id, state="error", progress=100, message="Chunked key moment detection failed", error=str(exc))
+        logging.exception("Chunked key moment detection failed")
+        fallback = (
+            f"Whisper failed while processing key-moment chunks on {device_label}. "
+            "Try CPU mode if GPU/CUDA is not configured correctly."
+        )
+        update_processing_job(
+            job_id,
+            state="error",
+            progress=100,
+            message="Chunked key moment detection failed",
+            error=friendly_error_message(exc, fallback),
+        )
     finally:
         chunk_root = TEMP_DIR / f"{video_id}_chunks"
         if chunk_root.exists():
@@ -1551,7 +1802,7 @@ def generate_captions():
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     try:
-        use_chunking = parse_bool_flag(request.form.get("use_chunking"), default=False)
+        use_chunking = parse_bool_flag(request.form.get("use_chunking"), default=True)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
@@ -1593,7 +1844,7 @@ def detect_key_moments():
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     try:
-        use_chunking = parse_bool_flag(request.form.get("use_chunking"), default=False)
+        use_chunking = parse_bool_flag(request.form.get("use_chunking"), default=True)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
@@ -1625,6 +1876,11 @@ def job_status(job_id: str):
         return jsonify({"error": "Unknown job_id."}), 404
 
     return jsonify(job), 200
+
+
+@app.get("/whisper_capabilities")
+def whisper_capabilities():
+    return jsonify(get_whisper_capabilities()), 200
 
 
 @app.get("/output/<path:filename>")
