@@ -691,32 +691,52 @@ def build_transcript_windows(
     return windows
 
 
+def _sample_windows_evenly(windows: list[dict[str, Any]], max_count: int) -> list[dict[str, Any]]:
+    """Return up to max_count windows sampled evenly across the full duration."""
+    if len(windows) <= max_count:
+        return windows
+    step = len(windows) / max_count
+    return [windows[round(i * step)] for i in range(max_count)]
+
+
 def score_transcript_windows_with_llm(
     transcript_windows: list[dict[str, Any]],
     *,
     model: str = LLM_SEMANTIC_MODEL,
+    max_retries: int = 2,
 ) -> dict[float, dict[str, Any]]:
+    import logging
+
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key or not transcript_windows:
+    if not api_key:
+        logging.warning(
+            "score_transcript_windows_with_llm: OPENAI_API_KEY is not set — "
+            "semantic scoring will be skipped and all windows will fall back to "
+            "keyword/audio signals only."
+        )
+        return {}
+    if not transcript_windows:
         return {}
 
-    sampled_windows = transcript_windows[:LLM_MAX_WINDOWS]
-    prompt = {
-        "instruction": (
-            "Score each transcript window for highlight significance from 0 to 10. "
-            "Use semantic context (novelty, reveal, emotional weight, actionable importance). "
-            "Return JSON with this exact schema: "
-            "{\"windows\": [{\"start\": 12.0, \"score\": 7, \"reason\": \"short reason\"}]}"
-        ),
-        "windows": [{"start": window["start"], "end": window["end"], "text": window["text"]} for window in sampled_windows],
-    }
+    # Sample evenly so long videos aren't truncated to only their first N windows.
+    sampled_windows = _sample_windows_evenly(transcript_windows, LLM_MAX_WINDOWS)
+
+    system_prompt = (
+        "You are a video highlight detection assistant. "
+        "Score each transcript window for highlight significance from 0 to 10. "
+        "Consider novelty, emotional weight, reveals, key conclusions, and actionable moments. "
+        "Respond ONLY with valid JSON matching the provided schema."
+    )
+    user_content = json.dumps(
+        [{"start": w["start"], "end": w["end"], "text": w["text"]} for w in sampled_windows]
+    )
     body = {
         "model": model,
-        "input": json.dumps(prompt),
-        "text": {
-            "format": {
-                "type": "json_schema",
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
                 "name": "semantic_window_scores",
+                "strict": True,
                 "schema": {
                     "type": "object",
                     "properties": {
@@ -737,25 +757,47 @@ def score_transcript_windows_with_llm(
                     "required": ["windows"],
                     "additionalProperties": False,
                 },
-            }
+            },
         },
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
     }
-    req = urllib_request.Request(
-        "https://api.openai.com/v1/responses",
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
-    )
 
-    try:
-        with urllib_request.urlopen(req, timeout=LLM_TIMEOUT_SECONDS) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-            parsed_text = payload.get("output", [{}])[0].get("content", [{}])[0].get("text", "{}")
-            parsed = json.loads(parsed_text)
-    except (error.URLError, TimeoutError, json.JSONDecodeError, KeyError, IndexError):
+    last_exc: Exception | None = None
+    for attempt in range(max_retries + 1):
+        req = urllib_request.Request(
+            "https://api.openai.com/v1/chat/completions",
+            data=json.dumps(body).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib_request.urlopen(req, timeout=LLM_TIMEOUT_SECONDS) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+                content = payload["choices"][0]["message"]["content"]
+                parsed = json.loads(content)
+                break
+        except (error.URLError, TimeoutError, json.JSONDecodeError, KeyError, IndexError) as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                logging.warning(
+                    "score_transcript_windows_with_llm: attempt %d/%d failed (%s), retrying...",
+                    attempt + 1,
+                    max_retries + 1,
+                    exc,
+                )
+    else:
+        logging.error(
+            "score_transcript_windows_with_llm: all %d attempts failed; last error: %s. "
+            "Semantic scoring will be skipped for this batch.",
+            max_retries + 1,
+            last_exc,
+        )
         return {}
 
     scored: dict[float, dict[str, Any]] = {}
@@ -1289,7 +1331,7 @@ def run_key_moment_job(job_id: str, video_path: Path, video_id: str, whisper_dev
         whisper_device = normalize_whisper_device(whisper_device)
         device_label = "GPU" if whisper_device == "cuda" else "CPU"
         update_processing_job(job_id, state="processing", progress=6, message="Reading video duration")
-        duration = get_video_duration(video_path)
+        duration = get_video_duration_ffprobe(video_path)
         if duration <= 0:
             raise RuntimeError("Could not determine video duration.")
 
