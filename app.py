@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import subprocess
 import threading
@@ -8,6 +9,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
+from urllib import error, request as urllib_request
 
 import cv2
 from flask import Flask, jsonify, request, send_from_directory
@@ -29,11 +31,14 @@ MAX_DETECTED_SCENES = 180
 MAX_HIGHLIGHT_SCENES = 80
 MOMENT_WINDOW_SECONDS = 5.0
 MOMENT_SCORE_THRESHOLD = 4
-MOMENT_KEYWORDS = {"amazing", "wow", "conclusion", "important"}
 SCENE_SNAP_TOLERANCE_SECONDS = 12.0
 CHUNK_SECONDS = 60
 CHUNK_OVERLAP_SECONDS = 5
 CHUNK_WORKERS = 2
+SEMANTIC_WINDOW_SECONDS = 45.0
+LLM_SEMANTIC_MODEL = os.getenv("HIGHLIGHT_LLM_MODEL", "gpt-4.1-mini")
+LLM_TIMEOUT_SECONDS = int(os.getenv("HIGHLIGHT_LLM_TIMEOUT_SECONDS", "30"))
+LLM_MAX_WINDOWS = 24
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
@@ -578,9 +583,188 @@ def analyze_audio_peaks(audio_path: Path) -> list[dict[str, float]]:
     return peaks
 
 
-def transcript_contains_keyword(segment: dict[str, Any], keywords: set[str]) -> bool:
-    text = str(segment.get("text", "")).lower()
-    return any(keyword in text for keyword in keywords)
+def analyze_pitch_variance_spikes(audio_path: Path) -> list[dict[str, float]]:
+    import librosa
+    import numpy as np
+
+    y, sample_rate = librosa.load(str(audio_path), sr=16000, mono=True)
+    if y.size == 0:
+        return []
+
+    frame_length = 2048
+    hop_length = 512
+    pitch = librosa.yin(y, fmin=80, fmax=500, sr=sample_rate, frame_length=frame_length, hop_length=hop_length)
+    if pitch.size == 0:
+        return []
+
+    valid_pitch = np.where(np.isfinite(pitch), pitch, np.nan)
+    if np.isnan(valid_pitch).all():
+        return []
+
+    deltas = np.abs(np.diff(valid_pitch))
+    valid_deltas = deltas[np.isfinite(deltas)]
+    if valid_deltas.size == 0:
+        return []
+
+    baseline = float(np.nanpercentile(valid_deltas, 75))
+    threshold = max(baseline * 1.6, 25.0)
+    spike_indexes = [index for index, value in enumerate(deltas) if np.isfinite(value) and float(value) >= threshold]
+    if not spike_indexes:
+        return []
+
+    spike_times = librosa.frames_to_time(spike_indexes, sr=sample_rate, hop_length=hop_length)
+    frame_seconds = hop_length / sample_rate
+    spikes: list[dict[str, float]] = []
+    start = float(spike_times[0])
+    previous = float(spike_times[0])
+
+    for spike_time in spike_times[1:]:
+        current = float(spike_time)
+        if current - previous > frame_seconds * 4:
+            spikes.append({"start": round(start, 3), "end": round(previous + frame_seconds, 3)})
+            start = current
+        previous = current
+
+    spikes.append({"start": round(start, 3), "end": round(previous + frame_seconds, 3)})
+    return spikes
+
+
+def calculate_speech_rate_spikes(
+    transcript_segments: list[dict[str, Any]],
+    window_seconds: float,
+) -> list[dict[str, float]]:
+    if not transcript_segments:
+        return []
+
+    rates: list[dict[str, float]] = []
+    for segment in transcript_segments:
+        text = str(segment.get("text", "")).strip()
+        if not text:
+            continue
+        start = float(segment.get("start", 0.0))
+        end = float(segment.get("end", start))
+        duration = max(end - start, 0.001)
+        word_count = len([word for word in text.split() if word.strip()])
+        if word_count == 0:
+            continue
+        rates.append({"start": start, "end": end, "rate": word_count / duration})
+
+    if not rates:
+        return []
+
+    average_rate = sum(rate["rate"] for rate in rates) / len(rates)
+    high_rate_threshold = average_rate * 1.4
+    low_rate_threshold = average_rate * 0.45
+    spikes: list[dict[str, float]] = []
+
+    for rate in rates:
+        duration = rate["end"] - rate["start"]
+        if duration > window_seconds:
+            continue
+
+        is_fast_burst = rate["rate"] >= high_rate_threshold
+        is_dramatic_pause = rate["rate"] <= low_rate_threshold and duration >= 1.5
+        if is_fast_burst or is_dramatic_pause:
+            spikes.append({"start": round(rate["start"], 3), "end": round(rate["end"], 3)})
+
+    return spikes
+
+
+def build_transcript_windows(
+    transcript_segments: list[dict[str, Any]],
+    duration: float,
+    window_seconds: float = SEMANTIC_WINDOW_SECONDS,
+) -> list[dict[str, Any]]:
+    windows: list[dict[str, Any]] = []
+    cursor = 0.0
+    while cursor < duration:
+        window_end = min(cursor + window_seconds, duration)
+        window_segments = [
+            segment
+            for segment in transcript_segments
+            if overlaps(cursor, window_end, float(segment.get("start", 0.0)), float(segment.get("end", 0.0)))
+            and str(segment.get("text", "")).strip()
+        ]
+        window_text = " ".join(str(segment.get("text", "")).strip() for segment in window_segments).strip()
+        windows.append({"start": round(cursor, 3), "end": round(window_end, 3), "text": window_text})
+        cursor += window_seconds
+    return windows
+
+
+def score_transcript_windows_with_llm(
+    transcript_windows: list[dict[str, Any]],
+    *,
+    model: str = LLM_SEMANTIC_MODEL,
+) -> dict[float, dict[str, Any]]:
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key or not transcript_windows:
+        return {}
+
+    sampled_windows = transcript_windows[:LLM_MAX_WINDOWS]
+    prompt = {
+        "instruction": (
+            "Score each transcript window for highlight significance from 0 to 10. "
+            "Use semantic context (novelty, reveal, emotional weight, actionable importance). "
+            "Return JSON with this exact schema: "
+            "{\"windows\": [{\"start\": 12.0, \"score\": 7, \"reason\": \"short reason\"}]}"
+        ),
+        "windows": [{"start": window["start"], "end": window["end"], "text": window["text"]} for window in sampled_windows],
+    }
+    body = {
+        "model": model,
+        "input": json.dumps(prompt),
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "semantic_window_scores",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "windows": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "start": {"type": "number"},
+                                    "score": {"type": "number"},
+                                    "reason": {"type": "string"},
+                                },
+                                "required": ["start", "score", "reason"],
+                                "additionalProperties": False,
+                            },
+                        }
+                    },
+                    "required": ["windows"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+    }
+    req = urllib_request.Request(
+        "https://api.openai.com/v1/responses",
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib_request.urlopen(req, timeout=LLM_TIMEOUT_SECONDS) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            parsed_text = payload.get("output", [{}])[0].get("content", [{}])[0].get("text", "{}")
+            parsed = json.loads(parsed_text)
+    except (error.URLError, TimeoutError, json.JSONDecodeError, KeyError, IndexError):
+        return {}
+
+    scored: dict[float, dict[str, Any]] = {}
+    for item in parsed.get("windows", []):
+        start = round(float(item.get("start", 0.0)), 3)
+        score = max(0.0, min(10.0, float(item.get("score", 0.0))))
+        reason = str(item.get("reason", "")).strip() or "semantic context"
+        scored[start] = {"score": score, "reason": reason}
+    return scored
 
 
 def nearest_preceding_scene_change(timestamp: float, scene_changes: list[float]) -> float:
@@ -598,7 +782,10 @@ def nearest_preceding_scene_change(timestamp: float, scene_changes: list[float])
 def calculate_moment_score(
     timestamp: float,
     audio_peaks: list[dict[str, float]],
+    pitch_spikes: list[dict[str, float]],
+    speech_rate_spikes: list[dict[str, float]],
     transcript_segments: list[dict[str, Any]],
+    semantic_scores: dict[float, dict[str, Any]],
     scene_changes: list[float],
 ) -> tuple[int, list[str]]:
     window_end = timestamp + MOMENT_WINDOW_SECONDS
@@ -609,15 +796,35 @@ def calculate_moment_score(
         score += 2
         reasons.append("audio peak")
 
-    keyword_segments = [
-        segment
-        for segment in transcript_segments
-        if overlaps(timestamp, window_end, float(segment.get("start", 0.0)), float(segment.get("end", 0.0)))
-        and transcript_contains_keyword(segment, MOMENT_KEYWORDS)
-    ]
-    if keyword_segments:
+    if any(overlaps(timestamp, window_end, spike["start"], spike["end"]) for spike in pitch_spikes):
+        score += 1
+        reasons.append("pitch spike")
+
+    if any(overlaps(timestamp, window_end, spike["start"], spike["end"]) for spike in speech_rate_spikes):
+        score += 1
+        reasons.append("speech-rate shift")
+
+    semantic_window_start = round((timestamp // SEMANTIC_WINDOW_SECONDS) * SEMANTIC_WINDOW_SECONDS, 3)
+    semantic_score = semantic_scores.get(semantic_window_start, {}).get("score", 0.0)
+    if semantic_score >= 6.5:
         score += 3
-        reasons.append("highlight keyword")
+        reasons.append("semantic highlight")
+    elif semantic_score >= 4.5:
+        score += 2
+        reasons.append("semantic context")
+    else:
+        fallback_text = " ".join(
+            str(segment.get("text", "")).strip()
+            for segment in transcript_segments
+            if overlaps(timestamp, window_end, float(segment.get("start", 0.0)), float(segment.get("end", 0.0)))
+        ).lower()
+        if any(cue in fallback_text for cue in ("final result", "let me show", "this is key", "most important")):
+            score += 2
+            reasons.append("context cue")
+
+    semantic_reason = str(semantic_scores.get(semantic_window_start, {}).get("reason", "")).strip()
+    if semantic_reason and semantic_reason != "semantic context":
+        reasons.append(semantic_reason)
 
     if any(timestamp <= scene_change <= timestamp + 0.75 for scene_change in scene_changes):
         score += 1
@@ -629,14 +836,25 @@ def calculate_moment_score(
 def detect_key_moment_clusters(
     duration: float,
     audio_peaks: list[dict[str, float]],
+    pitch_spikes: list[dict[str, float]],
+    speech_rate_spikes: list[dict[str, float]],
     transcript_segments: list[dict[str, Any]],
+    semantic_scores: dict[float, dict[str, Any]],
     scene_changes: list[float],
 ) -> list[dict[str, Any]]:
     scored_windows: list[dict[str, Any]] = []
     timestamp = 0.0
 
     while timestamp < duration:
-        score, reasons = calculate_moment_score(timestamp, audio_peaks, transcript_segments, scene_changes)
+        score, reasons = calculate_moment_score(
+            timestamp,
+            audio_peaks,
+            pitch_spikes,
+            speech_rate_spikes,
+            transcript_segments,
+            semantic_scores,
+            scene_changes,
+        )
         if score > MOMENT_SCORE_THRESHOLD:
             scored_windows.append(
                 {
@@ -715,13 +933,25 @@ def process_chunk_key_moments(chunk: dict[str, Any], whisper_device: str) -> dic
     try:
         extract_wav_audio_from_video(chunk["path"], audio_path)
         audio_peaks = analyze_audio_peaks(audio_path)
+        pitch_spikes = analyze_pitch_variance_spikes(audio_path)
 
         model = load_whisper_model(whisper_device)
         transcription = model.transcribe(str(audio_path), fp16=whisper_device == "cuda", verbose=False)
         transcript_segments = transcription.get("segments", [])
+        speech_rate_spikes = calculate_speech_rate_spikes(transcript_segments, MOMENT_WINDOW_SECONDS)
         scenes = analyze_scene_changes(chunk["path"])
         scene_changes = [float(scene["start"]) for scene in scenes if float(scene["start"]) > 0]
-        moments = detect_key_moment_clusters(float(chunk["duration"]), audio_peaks, transcript_segments, scene_changes)
+        transcript_windows = build_transcript_windows(transcript_segments, float(chunk["duration"]))
+        semantic_scores = score_transcript_windows_with_llm(transcript_windows)
+        moments = detect_key_moment_clusters(
+            float(chunk["duration"]),
+            audio_peaks,
+            pitch_spikes,
+            speech_rate_spikes,
+            transcript_segments,
+            semantic_scores,
+            scene_changes,
+        )
 
         absolute_start = float(chunk["start"])
         absolute_end = float(chunk["end"])
@@ -743,6 +973,20 @@ def process_chunk_key_moments(chunk: dict[str, Any], whisper_device: str) -> dic
             }
             for peak in audio_peaks
         ]
+        adjusted_pitch_spikes = [
+            {
+                "start": round(absolute_start + float(spike["start"]), 3),
+                "end": round(min(absolute_start + float(spike["end"]), absolute_end), 3),
+            }
+            for spike in pitch_spikes
+        ]
+        adjusted_speech_rate_spikes = [
+            {
+                "start": round(absolute_start + float(spike["start"]), 3),
+                "end": round(min(absolute_start + float(spike["end"]), absolute_end), 3),
+            }
+            for spike in speech_rate_spikes
+        ]
         adjusted_scene_changes = [
             round(absolute_start + change, 3)
             for change in scene_changes
@@ -760,6 +1004,8 @@ def process_chunk_key_moments(chunk: dict[str, Any], whisper_device: str) -> dic
 
         return {
             "audio_peaks": adjusted_audio_peaks,
+            "pitch_spikes": adjusted_pitch_spikes,
+            "speech_rate_spikes": adjusted_speech_rate_spikes,
             "scene_changes": adjusted_scene_changes,
             "transcript_segments": adjusted_transcript_segments,
             "moments": adjusted_moments,
@@ -801,12 +1047,16 @@ def merge_results(result_type: str, chunk_results: list[dict[str, Any]]) -> dict
         return {"segments": merged_segments}
 
     merged_audio_peaks: list[dict[str, float]] = []
+    merged_pitch_spikes: list[dict[str, float]] = []
+    merged_speech_rate_spikes: list[dict[str, float]] = []
     merged_scene_changes: list[float] = []
     merged_transcript_segments: list[dict[str, Any]] = []
     merged_moments: list[dict[str, Any]] = []
 
     for chunk_result in chunk_results:
         merged_audio_peaks.extend(chunk_result.get("audio_peaks", []))
+        merged_pitch_spikes.extend(chunk_result.get("pitch_spikes", []))
+        merged_speech_rate_spikes.extend(chunk_result.get("speech_rate_spikes", []))
         merged_scene_changes.extend(chunk_result.get("scene_changes", []))
         merged_transcript_segments.extend(chunk_result.get("transcript_segments", []))
 
@@ -830,9 +1080,13 @@ def merge_results(result_type: str, chunk_results: list[dict[str, Any]]) -> dict
     merged_scene_changes = sorted(set(round(change, 3) for change in merged_scene_changes))
     merged_transcript_segments.sort(key=lambda segment: (float(segment["start"]), float(segment["end"])))
     merged_audio_peaks.sort(key=lambda peak: (float(peak["start"]), float(peak["end"])))
+    merged_pitch_spikes.sort(key=lambda spike: (float(spike["start"]), float(spike["end"])))
+    merged_speech_rate_spikes.sort(key=lambda spike: (float(spike["start"]), float(spike["end"])))
 
     return {
         "audio_peaks": merged_audio_peaks,
+        "pitch_spikes": merged_pitch_spikes,
+        "speech_rate_spikes": merged_speech_rate_spikes,
         "scene_changes": merged_scene_changes,
         "transcript_segments": merged_transcript_segments,
         "moments": merged_moments,
@@ -1042,8 +1296,9 @@ def run_key_moment_job(job_id: str, video_path: Path, video_id: str, whisper_dev
         update_processing_job(job_id, state="processing", progress=14, message="Extracting audio with FFmpeg")
         extract_wav_audio_from_video(video_path, audio_path)
 
-        update_processing_job(job_id, state="processing", progress=28, message="Finding audio peaks with librosa")
+        update_processing_job(job_id, state="processing", progress=28, message="Analyzing audio energy and pitch dynamics")
         audio_peaks = analyze_audio_peaks(audio_path)
+        pitch_spikes = analyze_pitch_variance_spikes(audio_path)
 
         update_processing_job(job_id, state="processing", progress=42, message=f"Loading Whisper base model on {device_label}")
         model = load_whisper_model(whisper_device)
@@ -1051,13 +1306,26 @@ def run_key_moment_job(job_id: str, video_path: Path, video_id: str, whisper_dev
         update_processing_job(job_id, state="processing", progress=58, message=f"Transcribing with local Whisper on {device_label}")
         transcription = model.transcribe(str(audio_path), fp16=whisper_device == "cuda", verbose=False)
         transcript_segments = transcription.get("segments", [])
+        speech_rate_spikes = calculate_speech_rate_spikes(transcript_segments, MOMENT_WINDOW_SECONDS)
 
-        update_processing_job(job_id, state="processing", progress=74, message="Detecting scene transitions")
+        update_processing_job(job_id, state="processing", progress=68, message="Running semantic transcript scoring")
+        transcript_windows = build_transcript_windows(transcript_segments, duration)
+        semantic_scores = score_transcript_windows_with_llm(transcript_windows)
+
+        update_processing_job(job_id, state="processing", progress=78, message="Detecting scene transitions")
         scenes = analyze_scene_changes(video_path)
         scene_changes = [float(scene["start"]) for scene in scenes if float(scene["start"]) > 0]
 
-        update_processing_job(job_id, state="processing", progress=88, message="Scoring viral-ready windows")
-        moments = detect_key_moment_clusters(duration, audio_peaks, transcript_segments, scene_changes)
+        update_processing_job(job_id, state="processing", progress=90, message="Fusing transcript, audio, and scene signals")
+        moments = detect_key_moment_clusters(
+            duration,
+            audio_peaks,
+            pitch_spikes,
+            speech_rate_spikes,
+            transcript_segments,
+            semantic_scores,
+            scene_changes,
+        )
 
         update_processing_job(
             job_id,
@@ -1067,6 +1335,8 @@ def run_key_moment_job(job_id: str, video_path: Path, video_id: str, whisper_dev
             result={
                 "moments": moments,
                 "audio_peaks": audio_peaks,
+                "pitch_spikes": pitch_spikes,
+                "speech_rate_spikes": speech_rate_spikes,
                 "scene_changes": scene_changes,
                 "transcript_segments": transcript_segments,
             },
