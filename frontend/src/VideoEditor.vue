@@ -1,50 +1,138 @@
 <template>
-  <section class="video-editor">
-    <h1>Phase 1: Time-Based MVP</h1>
-    <p>Detect scene changes, review timestamps, then generate a hype reel.</p>
+  <main class="shell">
+    <section class="workspace">
+      <header class="masthead">
+        <div>
+          <p class="eyebrow">AI Video Editor</p>
+          <h1>Scene-to-hype reel studio</h1>
+        </div>
+        <div class="status-pill" :class="status">
+          <span class="status-dot"></span>
+          {{ statusLabel }}
+        </div>
+      </header>
 
-    <input
-      type="file"
-      accept="video/*"
-      @change="handleFileChange"
-      :disabled="status === 'processing'"
-    />
+      <section
+        class="drop-zone"
+        :class="{ active: selectedFile, working: isProcessing }"
+        @dragover.prevent="isDragging = true"
+        @dragleave.prevent="isDragging = false"
+        @drop.prevent="handleFileDrop"
+      >
+        <input
+          id="video-upload"
+          type="file"
+          accept="video/*"
+          @change="handleFileChange"
+          :disabled="isProcessing"
+        />
+        <label for="video-upload" class="upload-target" :class="{ dragging: isDragging }">
+          <span class="upload-icon">+</span>
+          <span>
+            <strong>{{ selectedFile ? selectedFile.name : 'Drop a video or choose a file' }}</strong>
+            <small>{{ selectedFileMeta }}</small>
+          </span>
+        </label>
+      </section>
 
-    <div class="button-row">
-      <button @click="detectScenes" :disabled="!selectedFile || status === 'processing'">
-        Detect Scenes
-      </button>
+      <section class="controls">
+        <button @click="detectScenes" :disabled="!selectedFile || isProcessing">
+          Detect Scenes
+        </button>
 
-      <button @click="generateHypeReel" :disabled="!videoId || scenes.length === 0 || status === 'processing'">
-        Generate Hype Reel
-      </button>
-    </div>
+        <button class="secondary" @click="generateHypeReel" :disabled="!canGenerate">
+          Generate Hype Reel
+        </button>
 
-    <div class="status-area">
-      <p v-if="status === 'idle'">Status: Idle</p>
-      <p v-else-if="status === 'processing'">Status: Processing...</p>
-      <p v-else-if="status === 'complete'" class="success">{{ statusMessage }}</p>
-      <p v-else-if="status === 'error'" class="error">{{ statusMessage }}</p>
-    </div>
+        <button class="tertiary" @click="generateCaptions" :disabled="!canGenerateCaptions">
+          Generate Captions
+        </button>
+      </section>
 
-    <div v-if="scenes.length > 0" class="scene-list">
-      <h3>Detected Scene Timestamps</h3>
-      <ul>
-        <li v-for="(scene, index) in scenes" :key="`${scene.start}-${scene.end}-${index}`">
-          Scene {{ index + 1 }}: {{ formatSeconds(scene.start) }}s → {{ formatSeconds(scene.end) }}s
-        </li>
-      </ul>
-    </div>
+      <section class="progress-panel" :class="{ active: status !== 'idle' }">
+        <div class="progress-copy">
+          <div>
+            <p class="eyebrow">Status</p>
+            <h2>{{ progressTitle }}</h2>
+          </div>
+          <strong>{{ displayedProgress }}%</strong>
+        </div>
 
-    <div v-if="downloadUrl" class="result-box">
-      <h3>Hype Reel Ready</h3>
-      <a :href="downloadUrl" target="_blank" rel="noopener">Download / Open result</a>
-    </div>
-  </section>
+        <div class="progress-track">
+          <div class="progress-fill" :style="{ width: `${displayedProgress}%` }"></div>
+          <span class="progress-glow" :style="{ left: `${displayedProgress}%` }"></span>
+        </div>
+
+        <div class="stage-strip">
+          <span
+            v-for="stage in stages"
+            :key="stage.key"
+            :class="{ current: currentStage === stage.key, done: stage.done }"
+          >
+            {{ stage.label }}
+          </span>
+        </div>
+
+        <p v-if="status === 'error'" class="error">{{ statusMessage }}</p>
+        <p v-else class="status-message">{{ statusMessage || 'Ready when you are.' }}</p>
+      </section>
+
+      <section v-if="scenes.length > 0" class="timeline-panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Detected Scenes</p>
+            <h2>{{ scenes.length }} timestamp{{ scenes.length === 1 ? '' : 's' }}</h2>
+          </div>
+          <span>{{ totalSceneSeconds }}s scanned</span>
+        </div>
+
+        <div class="scene-rail">
+          <span
+            v-for="(scene, index) in timelineScenes"
+            :key="`${scene.start}-${scene.end}-${index}`"
+            class="scene-block"
+            :style="sceneStyle(scene, index)"
+            :title="`Scene ${index + 1}: ${formatSeconds(scene.start)}s to ${formatSeconds(scene.end)}s`"
+          ></span>
+        </div>
+
+        <ol class="scene-list">
+          <li v-for="(scene, index) in visibleScenes" :key="`row-${scene.start}-${scene.end}-${index}`">
+            <span>Scene {{ index + 1 }}</span>
+            <strong>{{ formatSeconds(scene.start) }}s -> {{ formatSeconds(scene.end) }}s</strong>
+          </li>
+        </ol>
+        <p v-if="hiddenSceneCount > 0" class="scene-note">
+          Showing the first {{ visibleScenes.length }} scenes. {{ hiddenSceneCount }} more are hidden to keep the editor responsive.
+        </p>
+      </section>
+
+      <section v-if="downloadUrl" class="result-box">
+        <div>
+          <p class="eyebrow">Result</p>
+          <h2>Hype reel ready</h2>
+        </div>
+        <a :href="downloadUrl" target="_blank" rel="noopener">Open result</a>
+      </section>
+
+      <section v-if="captionedUrl" class="result-box">
+        <div>
+          <p class="eyebrow">Captions</p>
+          <h2>Captioned video ready</h2>
+        </div>
+        <div class="result-actions">
+          <a :href="captionedUrl" target="_blank" rel="noopener">Open video</a>
+          <a v-if="srtUrl" class="quiet-link" :href="srtUrl" target="_blank" rel="noopener">Open SRT</a>
+        </div>
+      </section>
+    </section>
+  </main>
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
+
+const API_BASE = 'http://localhost:5000'
 
 const selectedFile = ref(null)
 const videoId = ref('')
@@ -52,26 +140,137 @@ const scenes = ref([])
 const status = ref('idle') // idle | processing | complete | error
 const statusMessage = ref('')
 const downloadUrl = ref('')
+const captionedUrl = ref('')
+const srtUrl = ref('')
+const captionSegments = ref([])
+const progress = ref(0)
+const activeJobType = ref('')
+const isDragging = ref(false)
+const pollTimer = ref(null)
+
+const isProcessing = computed(() => status.value === 'processing')
+const canGenerate = computed(() => Boolean(videoId.value && scenes.value.length > 0 && !isProcessing.value))
+const canGenerateCaptions = computed(() => Boolean(selectedFile.value && !isProcessing.value))
+const displayedProgress = computed(() => Math.round(progress.value))
+const statusLabel = computed(() => {
+  if (status.value === 'processing') return 'Processing'
+  if (status.value === 'complete') return 'Complete'
+  if (status.value === 'error') return 'Needs attention'
+  return 'Idle'
+})
+const progressTitle = computed(() => {
+  if (activeJobType.value === 'scene_analysis') return 'Analyzing scene cuts'
+  if (activeJobType.value === 'smart_cut') return 'Building the hype reel'
+  if (activeJobType.value === 'captions') return 'Generating burned-in captions'
+  if (status.value === 'complete') return 'Ready'
+  if (status.value === 'error') return 'Paused'
+  return 'Waiting for a video'
+})
+const currentStage = computed(() => {
+  if (status.value === 'error') return 'error'
+  if (status.value === 'complete') return 'complete'
+  if (activeJobType.value === 'captions') {
+    if (progress.value >= 86) return 'burn'
+    if (progress.value >= 74) return 'srt'
+    if (progress.value >= 42) return 'transcribe'
+    if (progress.value >= 24) return 'model'
+    return 'extract'
+  }
+  if (activeJobType.value === 'smart_cut') return progress.value >= 86 ? 'stitch' : 'render'
+  if (activeJobType.value === 'scene_analysis') return progress.value >= 92 ? 'timeline' : 'scan'
+  return 'upload'
+})
+const stages = computed(() => {
+  if (activeJobType.value === 'captions') {
+    const captionOrder = ['extract', 'model', 'transcribe', 'srt', 'burn', 'complete']
+    const captionIndex = captionOrder.indexOf(currentStage.value)
+    return [
+      { key: 'extract', label: 'Audio' },
+      { key: 'model', label: 'Model' },
+      { key: 'transcribe', label: 'Whisper' },
+      { key: 'srt', label: 'SRT' },
+      { key: 'burn', label: 'Burn' },
+      { key: 'complete', label: 'Done' },
+    ].map((stage, index) => ({
+      ...stage,
+      done: captionIndex > index || status.value === 'complete',
+    }))
+  }
+
+  const stageOrder = ['upload', 'scan', 'timeline', 'render', 'stitch', 'complete']
+  const activeIndex = stageOrder.indexOf(currentStage.value)
+  return [
+    { key: 'upload', label: 'Upload' },
+    { key: 'scan', label: 'Scan' },
+    { key: 'timeline', label: 'Timeline' },
+    { key: 'render', label: 'Render' },
+    { key: 'stitch', label: 'Stitch' },
+    { key: 'complete', label: 'Done' },
+  ].map((stage, index) => ({
+    ...stage,
+    done: activeIndex > index || status.value === 'complete',
+  }))
+})
+const selectedFileMeta = computed(() => {
+  if (!selectedFile.value) return 'MP4, MOV, MKV, AVI, WEBM, or M4V'
+  return `${(selectedFile.value.size / 1024 / 1024).toFixed(1)} MB`
+})
+const totalSceneSeconds = computed(() => {
+  const lastScene = scenes.value[scenes.value.length - 1]
+  return lastScene ? formatSeconds(lastScene.end) : '0.000'
+})
+const visibleScenes = computed(() => scenes.value.slice(0, 240))
+const timelineScenes = computed(() => scenes.value.slice(0, 360))
+const hiddenSceneCount = computed(() => Math.max(0, scenes.value.length - visibleScenes.value.length))
+
+onBeforeUnmount(() => clearPollTimer())
+
+const clearPollTimer = () => {
+  if (pollTimer.value) {
+    window.clearTimeout(pollTimer.value)
+    pollTimer.value = null
+  }
+}
+
+const resetJobState = () => {
+  clearPollTimer()
+  progress.value = 0
+  activeJobType.value = ''
+  statusMessage.value = ''
+}
 
 const handleFileChange = (event) => {
-  const file = event.target.files?.[0] ?? null
+  setSelectedFile(event.target.files?.[0] ?? null)
+}
+
+const handleFileDrop = (event) => {
+  isDragging.value = false
+  if (isProcessing.value) return
+  setSelectedFile(event.dataTransfer.files?.[0] ?? null)
+}
+
+const setSelectedFile = (file) => {
   selectedFile.value = file
   videoId.value = ''
   scenes.value = []
   downloadUrl.value = ''
+  captionedUrl.value = ''
+  srtUrl.value = ''
+  captionSegments.value = []
   status.value = 'idle'
-  statusMessage.value = ''
+  resetJobState()
 }
 
 const detectScenes = async () => {
   if (!selectedFile.value) {
-    status.value = 'error'
-    statusMessage.value = 'Please select a video file first.'
+    setError('Please select a video file first.')
     return
   }
 
   status.value = 'processing'
-  statusMessage.value = ''
+  activeJobType.value = 'scene_analysis'
+  progress.value = 2
+  statusMessage.value = 'Uploading video'
   downloadUrl.value = ''
   scenes.value = []
 
@@ -79,39 +278,38 @@ const detectScenes = async () => {
   formData.append('video', selectedFile.value)
 
   try {
-    const response = await fetch('http://localhost:5000/analyze_scenes', {
+    const payload = await startRequest('/analyze_scenes', {
       method: 'POST',
       body: formData,
     })
 
-    const payload = await response.json()
-    if (!response.ok) {
-      throw new Error(payload.error || 'Scene detection failed.')
-    }
-
-    videoId.value = payload.video_id
-    scenes.value = Array.isArray(payload.scenes) ? payload.scenes : []
-    status.value = 'complete'
-    statusMessage.value = `Detected ${scenes.value.length} scene(s).`
+    await waitForJob(payload.job_id, (result) => {
+      videoId.value = result.video_id
+      scenes.value = Array.isArray(result.scenes) ? result.scenes : []
+      status.value = 'complete'
+      activeJobType.value = ''
+      progress.value = 100
+      statusMessage.value = `Detected ${scenes.value.length} scene(s).`
+    })
   } catch (error) {
-    status.value = 'error'
-    statusMessage.value = error.message || 'Unexpected error while detecting scenes.'
+    setError(error.message || 'Unexpected error while detecting scenes.')
   }
 }
 
 const generateHypeReel = async () => {
   if (!videoId.value || scenes.value.length === 0) {
-    status.value = 'error'
-    statusMessage.value = 'Detect scenes first before generating the hype reel.'
+    setError('Detect scenes first before generating the hype reel.')
     return
   }
 
   status.value = 'processing'
-  statusMessage.value = ''
+  activeJobType.value = 'smart_cut'
+  progress.value = 3
+  statusMessage.value = 'Starting render'
   downloadUrl.value = ''
 
   try {
-    const response = await fetch('http://localhost:5000/smart_cut', {
+    const payload = await startRequest('/smart_cut', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -122,17 +320,112 @@ const generateHypeReel = async () => {
       }),
     })
 
-    const payload = await response.json()
-    if (!response.ok) {
-      throw new Error(payload.error || 'Hype reel generation failed.')
-    }
-
-    downloadUrl.value = `http://localhost:5000${payload.hype_reel_path}`
-    status.value = 'complete'
-    statusMessage.value = 'Hype reel generated successfully.'
+    await waitForJob(payload.job_id, (result) => {
+      downloadUrl.value = `${API_BASE}${result.hype_reel_path}`
+      status.value = 'complete'
+      activeJobType.value = ''
+      progress.value = 100
+      statusMessage.value = 'Hype reel generated successfully.'
+    })
   } catch (error) {
-    status.value = 'error'
-    statusMessage.value = error.message || 'Unexpected error while generating hype reel.'
+    setError(error.message || 'Unexpected error while generating hype reel.')
+  }
+}
+
+const generateCaptions = async () => {
+  if (!selectedFile.value) {
+    setError('Please select a video file first.')
+    return
+  }
+
+  status.value = 'processing'
+  activeJobType.value = 'captions'
+  progress.value = 4
+  statusMessage.value = 'Uploading video for captions'
+  captionedUrl.value = ''
+  srtUrl.value = ''
+  captionSegments.value = []
+
+  const formData = new FormData()
+  formData.append('video', selectedFile.value)
+
+  try {
+    const payload = await startRequest('/generate_captions', {
+      method: 'POST',
+      body: formData,
+    })
+
+    await waitForJob(payload.job_id, (result) => {
+      captionedUrl.value = `${API_BASE}${result.captioned_video_path}`
+      srtUrl.value = `${API_BASE}${result.srt_path}`
+      captionSegments.value = Array.isArray(result.segments) ? result.segments : []
+      status.value = 'complete'
+      activeJobType.value = ''
+      progress.value = 100
+      statusMessage.value = `Generated ${captionSegments.value.length} caption segment(s).`
+    })
+  } catch (error) {
+    setError(error.message || 'Unexpected error while generating captions.')
+  }
+}
+
+const startRequest = async (path, options) => {
+  const response = await fetch(`${API_BASE}${path}`, options)
+  const payload = await response.json()
+  if (!response.ok) {
+    throw new Error(payload.error || 'Request failed.')
+  }
+  return payload
+}
+
+const waitForJob = (jobId, onComplete) => new Promise((resolve, reject) => {
+  const poll = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/job_status/${jobId}`)
+      const job = await response.json()
+      if (!response.ok) throw new Error(job.error || 'Could not read job status.')
+
+      progress.value = Number(job.progress ?? progress.value)
+      statusMessage.value = job.message || statusMessage.value
+
+      if (job.state === 'complete') {
+        clearPollTimer()
+        onComplete(job.result || {})
+        resolve(job.result || {})
+        return
+      }
+
+      if (job.state === 'error') {
+        clearPollTimer()
+        reject(new Error(job.error || job.message || 'Processing failed.'))
+        return
+      }
+
+      pollTimer.value = window.setTimeout(poll, 450)
+    } catch (error) {
+      clearPollTimer()
+      reject(error)
+    }
+  }
+
+  poll()
+})
+
+const setError = (message) => {
+  status.value = 'error'
+  activeJobType.value = ''
+  progress.value = 100
+  statusMessage.value = message
+}
+
+const sceneStyle = (scene, index) => {
+  const total = Number(scenes.value[scenes.value.length - 1]?.end || 1)
+  const start = Math.max(0, (Number(scene.start) / total) * 100)
+  const width = Math.max(1.5, ((Number(scene.end) - Number(scene.start)) / total) * 100)
+  return {
+    left: `${start}%`,
+    width: `${Math.min(width, 100 - start)}%`,
+    animationDelay: `${index * 45}ms`,
   }
 }
 
@@ -140,52 +433,451 @@ const formatSeconds = (value) => Number(value).toFixed(3)
 </script>
 
 <style scoped>
-.video-editor {
-  max-width: 800px;
-  margin: 2rem auto;
-  padding: 1.25rem;
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  font-family: Arial, sans-serif;
+:global(*) {
+  box-sizing: border-box;
 }
 
-.button-row {
-  margin-top: 1rem;
+:global(body) {
+  margin: 0;
+  background: #0f172a;
+  color: #e5e7eb;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.shell {
+  min-height: 100vh;
+  padding: 32px;
+  background:
+    radial-gradient(circle at top left, rgba(20, 184, 166, 0.18), transparent 34%),
+    linear-gradient(135deg, #101828 0%, #111827 48%, #172033 100%);
+}
+
+.workspace {
+  width: min(1040px, 100%);
+  margin: 0 auto;
+  display: grid;
+  gap: 18px;
+}
+
+.masthead,
+.controls,
+.progress-panel,
+.timeline-panel,
+.result-box,
+.drop-zone {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.74);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(18px);
+}
+
+.masthead {
   display: flex;
-  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 28px;
+  border-radius: 8px;
 }
 
-button {
-  padding: 0.6rem 1rem;
+.eyebrow {
+  margin: 0 0 6px;
+  color: #5eead4;
+  font-size: 0.73rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+h1,
+h2 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+h1 {
+  font-size: clamp(2rem, 7vw, 4.5rem);
+  line-height: 0.98;
+}
+
+h2 {
+  font-size: 1.25rem;
+}
+
+.status-pill {
+  min-width: 128px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: rgba(30, 41, 59, 0.95);
+  color: #cbd5e1;
+  font-weight: 800;
+}
+
+.status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #94a3b8;
+}
+
+.status-pill.processing .status-dot {
+  background: #22c55e;
+  box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.55);
+  animation: pulse 1.1s infinite;
+}
+
+.status-pill.complete .status-dot {
+  background: #5eead4;
+}
+
+.status-pill.error .status-dot {
+  background: #fb7185;
+}
+
+.drop-zone {
+  border-radius: 8px;
+  padding: 16px;
+  transition: transform 180ms ease, border-color 180ms ease;
+}
+
+.drop-zone.working {
+  border-color: rgba(94, 234, 212, 0.55);
+}
+
+input[type="file"] {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.upload-target {
+  min-height: 116px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 20px;
+  border: 1px dashed rgba(148, 163, 184, 0.44);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 180ms ease, border-color 180ms ease, transform 180ms ease;
+}
+
+.upload-target.dragging,
+.upload-target:hover {
+  border-color: #5eead4;
+  background: rgba(20, 184, 166, 0.08);
+  transform: translateY(-1px);
+}
+
+.upload-icon {
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #14b8a6;
+  color: #052e2b;
+  font-size: 2rem;
+  font-weight: 800;
+}
+
+.upload-target strong,
+.upload-target small {
+  display: block;
+}
+
+.upload-target strong {
+  max-width: 72vw;
+  overflow-wrap: anywhere;
+  font-size: 1rem;
+}
+
+.upload-target small {
+  margin-top: 5px;
+  color: #94a3b8;
+}
+
+.controls {
+  display: flex;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 8px;
+}
+
+button,
+.result-box a {
+  min-height: 44px;
+  padding: 0 18px;
   border: 0;
   border-radius: 8px;
-  background: #2563eb;
-  color: #ffffff;
+  background: #2dd4bf;
+  color: #042f2e;
+  font: inherit;
+  font-weight: 900;
   cursor: pointer;
+  text-decoration: none;
+  transition: transform 160ms ease, opacity 160ms ease, background 160ms ease;
+}
+
+button:hover,
+.result-box a:hover {
+  transform: translateY(-1px);
+}
+
+button.secondary {
+  background: #f59e0b;
+  color: #271806;
+}
+
+button.tertiary {
+  background: #a3e635;
+  color: #1a2e05;
 }
 
 button:disabled {
-  opacity: 0.6;
+  opacity: 0.45;
   cursor: not-allowed;
+  transform: none;
 }
 
-.status-area {
-  margin-top: 1rem;
-}
-
-.scene-list,
+.progress-panel,
+.timeline-panel,
 .result-box {
-  margin-top: 1rem;
-  padding: 0.75rem;
-  border: 1px solid #e5e7eb;
+  padding: 22px;
   border-radius: 8px;
 }
 
-.success {
-  color: #166534;
+.progress-panel {
+  position: relative;
+  overflow: hidden;
+}
+
+.progress-panel.active::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 0%, rgba(94, 234, 212, 0.09) 48%, transparent 58%);
+  transform: translateX(-100%);
+  animation: sweep 2.2s infinite;
+}
+
+.progress-copy,
+.section-heading,
+.result-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.progress-copy {
+  position: relative;
+  z-index: 1;
+}
+
+.progress-copy strong {
+  font-size: 2rem;
+  color: #f8fafc;
+}
+
+.progress-track {
+  position: relative;
+  height: 14px;
+  margin: 18px 0;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(51, 65, 85, 0.9);
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #14b8a6, #a3e635, #f59e0b);
+  transition: width 380ms ease;
+}
+
+.progress-glow {
+  position: absolute;
+  top: 50%;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: rgba(250, 204, 21, 0.68);
+  filter: blur(10px);
+  transform: translate(-50%, -50%);
+  transition: left 380ms ease;
+}
+
+.stage-strip {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.stage-strip span {
+  min-height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: rgba(30, 41, 59, 0.8);
+  color: #94a3b8;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.stage-strip span.current {
+  background: rgba(20, 184, 166, 0.26);
+  color: #ccfbf1;
+}
+
+.stage-strip span.done {
+  background: rgba(132, 204, 22, 0.22);
+  color: #ecfccb;
+}
+
+.status-message,
+.error {
+  margin: 14px 0 0;
+  color: #cbd5e1;
 }
 
 .error {
-  color: #b91c1c;
+  color: #fecdd3;
+}
+
+.section-heading span {
+  color: #94a3b8;
+  font-weight: 800;
+}
+
+.scene-rail {
+  position: relative;
+  height: 54px;
+  margin: 20px 0;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.95);
+  overflow: hidden;
+}
+
+.scene-block {
+  position: absolute;
+  top: 9px;
+  bottom: 9px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #2dd4bf, #a3e635);
+  box-shadow: 0 0 18px rgba(45, 212, 191, 0.25);
+  animation: riseIn 420ms both ease;
+}
+
+.scene-list {
+  max-height: 260px;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  overflow: auto;
+  list-style: none;
+}
+
+.scene-note {
+  margin: 12px 0 0;
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
+
+.scene-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: rgba(30, 41, 59, 0.66);
+}
+
+.scene-list span {
+  color: #94a3b8;
+}
+
+.scene-list strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.result-box a {
+  display: inline-grid;
+  place-items: center;
+}
+
+.result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.result-actions .quiet-link {
+  background: rgba(148, 163, 184, 0.18);
+  color: #e5e7eb;
+}
+
+@keyframes pulse {
+  70% {
+    box-shadow: 0 0 0 12px rgba(34, 197, 94, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+  }
+}
+
+@keyframes sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes riseIn {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 720px) {
+  .shell {
+    padding: 14px;
+  }
+
+  .masthead,
+  .controls,
+  .progress-copy,
+  .section-heading,
+  .result-box {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .controls {
+    display: grid;
+  }
+
+  .stage-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .scene-list li {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 10px 12px;
+  }
 }
 </style>

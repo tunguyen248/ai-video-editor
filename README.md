@@ -21,9 +21,21 @@
 ## Run
 ```bash
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate or .venv\Scripts\Activate.ps1
+pip install --upgrade pip
 pip install -r requirements.txt
-export FLASK_APP=app.py
+```
+
+Equivalent explicit install command:
+
+```bash
+pip install Flask flask-cors opencv-python
+```
+
+Start backend with Flask:
+
+```bash
+export FLASK_APP=app.py or $env:FLASK_APP = "app.py"
 flask run --host 0.0.0.0 --port 5000
 ```
 
