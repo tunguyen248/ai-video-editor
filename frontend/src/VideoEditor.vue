@@ -36,6 +36,14 @@
       </section>
 
       <section class="controls">
+        <label class="device-select">
+          <span>Whisper</span>
+          <select v-model="whisperDevice" :disabled="isProcessing">
+            <option value="cpu">CPU</option>
+            <option value="gpu">GPU</option>
+          </select>
+        </label>
+
         <button @click="detectScenes" :disabled="!selectedFile || isProcessing">
           Detect Scenes
         </button>
@@ -46,6 +54,10 @@
 
         <button class="tertiary" @click="generateCaptions" :disabled="!canGenerateCaptions">
           Generate Captions
+        </button>
+
+        <button class="quaternary" @click="detectKeyMoments" :disabled="!canGenerateCaptions">
+          Key Moments
         </button>
       </section>
 
@@ -125,6 +137,22 @@
           <a v-if="srtUrl" class="quiet-link" :href="srtUrl" target="_blank" rel="noopener">Open SRT</a>
         </div>
       </section>
+
+      <section v-if="keyMoments.length > 0" class="timeline-panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Key Moments</p>
+            <h2>{{ keyMoments.length }} clip{{ keyMoments.length === 1 ? '' : 's' }}</h2>
+          </div>
+        </div>
+
+        <ol class="scene-list">
+          <li v-for="(moment, index) in keyMoments" :key="`moment-${moment.start}-${index}`">
+            <span>{{ formatSeconds(moment.start) }}s -> {{ formatSeconds(moment.end) }}s</span>
+            <strong>{{ moment.score }} pts · {{ moment.reason }}</strong>
+          </li>
+        </ol>
+      </section>
     </section>
   </main>
 </template>
@@ -143,6 +171,8 @@ const downloadUrl = ref('')
 const captionedUrl = ref('')
 const srtUrl = ref('')
 const captionSegments = ref([])
+const keyMoments = ref([])
+const whisperDevice = ref('cpu')
 const progress = ref(0)
 const activeJobType = ref('')
 const isDragging = ref(false)
@@ -162,6 +192,7 @@ const progressTitle = computed(() => {
   if (activeJobType.value === 'scene_analysis') return 'Analyzing scene cuts'
   if (activeJobType.value === 'smart_cut') return 'Building the hype reel'
   if (activeJobType.value === 'captions') return 'Generating burned-in captions'
+  if (activeJobType.value === 'key_moments') return 'Detecting key moments'
   if (status.value === 'complete') return 'Ready'
   if (status.value === 'error') return 'Paused'
   return 'Waiting for a video'
@@ -169,6 +200,14 @@ const progressTitle = computed(() => {
 const currentStage = computed(() => {
   if (status.value === 'error') return 'error'
   if (status.value === 'complete') return 'complete'
+  if (activeJobType.value === 'key_moments') {
+    if (progress.value >= 88) return 'score'
+    if (progress.value >= 74) return 'visual'
+    if (progress.value >= 58) return 'transcribe'
+    if (progress.value >= 42) return 'model'
+    if (progress.value >= 28) return 'peaks'
+    return 'extract'
+  }
   if (activeJobType.value === 'captions') {
     if (progress.value >= 86) return 'burn'
     if (progress.value >= 74) return 'srt'
@@ -181,6 +220,23 @@ const currentStage = computed(() => {
   return 'upload'
 })
 const stages = computed(() => {
+  if (activeJobType.value === 'key_moments') {
+    const momentOrder = ['extract', 'peaks', 'model', 'transcribe', 'visual', 'score', 'complete']
+    const momentIndex = momentOrder.indexOf(currentStage.value)
+    return [
+      { key: 'extract', label: 'Audio' },
+      { key: 'peaks', label: 'Peaks' },
+      { key: 'model', label: 'Model' },
+      { key: 'transcribe', label: 'Whisper' },
+      { key: 'visual', label: 'Scenes' },
+      { key: 'score', label: 'Score' },
+      { key: 'complete', label: 'Done' },
+    ].map((stage, index) => ({
+      ...stage,
+      done: momentIndex > index || status.value === 'complete',
+    }))
+  }
+
   if (activeJobType.value === 'captions') {
     const captionOrder = ['extract', 'model', 'transcribe', 'srt', 'burn', 'complete']
     const captionIndex = captionOrder.indexOf(currentStage.value)
@@ -257,6 +313,7 @@ const setSelectedFile = (file) => {
   captionedUrl.value = ''
   srtUrl.value = ''
   captionSegments.value = []
+  keyMoments.value = []
   status.value = 'idle'
   resetJobState()
 }
@@ -293,6 +350,40 @@ const detectScenes = async () => {
     })
   } catch (error) {
     setError(error.message || 'Unexpected error while detecting scenes.')
+  }
+}
+
+const detectKeyMoments = async () => {
+  if (!selectedFile.value) {
+    setError('Please select a video file first.')
+    return
+  }
+
+  status.value = 'processing'
+  activeJobType.value = 'key_moments'
+  progress.value = 4
+  statusMessage.value = `Uploading video for key moment detection on ${whisperDevice.value.toUpperCase()}`
+  keyMoments.value = []
+
+  const formData = new FormData()
+  formData.append('video', selectedFile.value)
+  formData.append('device', whisperDevice.value)
+
+  try {
+    const payload = await startRequest('/detect_key_moments', {
+      method: 'POST',
+      body: formData,
+    })
+
+    await waitForJob(payload.job_id, (result) => {
+      keyMoments.value = Array.isArray(result.moments) ? result.moments : []
+      status.value = 'complete'
+      activeJobType.value = ''
+      progress.value = 100
+      statusMessage.value = `Detected ${keyMoments.value.length} key moment(s).`
+    })
+  } catch (error) {
+    setError(error.message || 'Unexpected error while detecting key moments.')
   }
 }
 
@@ -348,6 +439,7 @@ const generateCaptions = async () => {
 
   const formData = new FormData()
   formData.append('video', selectedFile.value)
+  formData.append('device', whisperDevice.value)
 
   try {
     const payload = await startRequest('/generate_captions', {
@@ -638,6 +730,38 @@ button.secondary {
 button.tertiary {
   background: #a3e635;
   color: #1a2e05;
+}
+
+button.quaternary {
+  background: #38bdf8;
+  color: #082f49;
+}
+
+.device-select {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: rgba(30, 41, 59, 0.8);
+  color: #cbd5e1;
+  font-weight: 800;
+}
+
+.device-select span {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+
+.device-select select {
+  min-height: 30px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 6px;
+  background: #0f172a;
+  color: #f8fafc;
+  font: inherit;
+  font-weight: 800;
 }
 
 button:disabled {
