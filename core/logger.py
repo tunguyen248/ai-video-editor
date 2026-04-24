@@ -40,6 +40,7 @@ class JsonLogFormatter(logging.Formatter):
             "transcript_json_path",
             "transcript_text_path",
             "segment_count",
+            "audio_path",
         ):
             value = getattr(record, key, None)
             if value is not None:

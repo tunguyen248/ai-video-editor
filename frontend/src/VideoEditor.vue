@@ -101,6 +101,16 @@
         <p v-else class="status-message">{{ statusMessage || 'Ready when you are.' }}</p>
       </section>
 
+      <section v-if="activeVideoUrl" class="player-panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Preview</p>
+            <h2>{{ activeVideoTitle }}</h2>
+          </div>
+        </div>
+        <video :key="activeVideoUrl" class="video-player" :src="activeVideoUrl" controls autoplay playsinline></video>
+      </section>
+
       <section v-if="scenes.length > 0" class="timeline-panel">
         <div class="section-heading">
           <div>
@@ -136,7 +146,7 @@
           <p class="eyebrow">Result</p>
           <h2>Hype reel ready</h2>
         </div>
-        <a :href="downloadUrl" target="_blank" rel="noopener">Open result</a>
+        <button type="button" @click="playVideo(downloadUrl, 'Hype reel')">Open result</button>
       </section>
 
       <section v-if="clipUrls.length > 0" class="result-box">
@@ -145,15 +155,14 @@
           <h2>{{ clipUrls.length }} clip{{ clipUrls.length === 1 ? '' : 's' }} ready</h2>
         </div>
         <div class="result-actions">
-          <a
+          <button
             v-for="(clipUrl, index) in clipUrls"
             :key="clipUrl"
-            :href="clipUrl"
-            target="_blank"
-            rel="noopener"
+            type="button"
+            @click="playVideo(clipUrl, `Clip ${index + 1}`)"
           >
             Open {{ index + 1 }}
-          </a>
+          </button>
         </div>
       </section>
 
@@ -163,7 +172,7 @@
           <h2>Captioned video ready</h2>
         </div>
         <div class="result-actions">
-          <a :href="captionedUrl" target="_blank" rel="noopener">Open video</a>
+          <button type="button" @click="playVideo(captionedUrl, 'Captioned video')">Open video</button>
           <a v-if="srtUrl" class="quiet-link" :href="srtUrl" target="_blank" rel="noopener">Open SRT</a>
         </div>
       </section>
@@ -179,7 +188,7 @@
         <ol class="scene-list">
           <li v-for="(moment, index) in keyMoments" :key="`moment-${moment.start}-${index}`">
             <span>{{ formatSeconds(moment.start) }}s -> {{ formatSeconds(moment.end) }}s</span>
-            <a v-if="moment.clipUrl" :href="moment.clipUrl" target="_blank" rel="noopener">Open clip</a>
+            <button v-if="moment.clipUrl" type="button" @click="playVideo(moment.clipUrl, `Key moment ${index + 1}`)">Open clip</button>
             <strong>{{ moment.score }} pts · {{ moment.reason }}</strong>
           </li>
         </ol>
@@ -200,6 +209,8 @@ const status = ref('idle') // idle | processing | complete | error
 const statusMessage = ref('')
 const downloadUrl = ref('')
 const clipUrls = ref([])
+const activeVideoUrl = ref('')
+const activeVideoTitle = ref('Preview')
 const captionedUrl = ref('')
 const srtUrl = ref('')
 const captionSegments = ref([])
@@ -368,6 +379,8 @@ const setSelectedFile = (file) => {
   scenes.value = []
   downloadUrl.value = ''
   clipUrls.value = []
+  activeVideoUrl.value = ''
+  activeVideoTitle.value = 'Preview'
   captionedUrl.value = ''
   srtUrl.value = ''
   captionSegments.value = []
@@ -388,6 +401,8 @@ const detectScenes = async () => {
   statusMessage.value = 'Uploading video'
   downloadUrl.value = ''
   clipUrls.value = []
+  activeVideoUrl.value = ''
+  activeVideoTitle.value = 'Preview'
   scenes.value = []
 
   const formData = new FormData()
@@ -424,6 +439,8 @@ const detectKeyMoments = async () => {
   statusMessage.value = `Uploading video for key moment detection on ${whisperDevice.value.toUpperCase()}${smartChunking.value ? ' with smart chunking' : ''}`
   keyMoments.value = []
   clipUrls.value = []
+  activeVideoUrl.value = ''
+  activeVideoTitle.value = 'Preview'
 
   const formData = new FormData()
   formData.append('video', selectedFile.value)
@@ -468,6 +485,8 @@ const generateHypeReel = async () => {
   statusMessage.value = 'Starting render'
   downloadUrl.value = ''
   clipUrls.value = []
+  activeVideoUrl.value = ''
+  activeVideoTitle.value = 'Preview'
 
   try {
     const payload = await startRequest('/smart_cut', {
@@ -509,6 +528,8 @@ const generateCaptions = async () => {
   captionedUrl.value = ''
   srtUrl.value = ''
   captionSegments.value = []
+  activeVideoUrl.value = ''
+  activeVideoTitle.value = 'Preview'
 
   const formData = new FormData()
   formData.append('video', selectedFile.value)
@@ -542,6 +563,12 @@ const startRequest = async (path, options) => {
     throw new Error(payload.error || 'Request failed.')
   }
   return payload
+}
+
+const playVideo = (url, title = 'Preview') => {
+  if (!url) return
+  activeVideoUrl.value = url
+  activeVideoTitle.value = title
 }
 
 const loadWhisperCapabilities = async () => {
@@ -656,6 +683,7 @@ onMounted(() => {
 .controls,
 .progress-panel,
 .timeline-panel,
+.player-panel,
 .result-box,
 .drop-zone {
   border: 1px solid rgba(148, 163, 184, 0.22);
@@ -804,7 +832,8 @@ input[type="file"] {
 }
 
 button,
-.result-box a {
+.result-box a,
+.result-box button {
   min-height: 44px;
   padding: 0 18px;
   border: 0;
@@ -819,7 +848,8 @@ button,
 }
 
 button:hover,
-.result-box a:hover {
+.result-box a:hover,
+.result-box button:hover {
   transform: translateY(-1px);
 }
 
@@ -916,6 +946,7 @@ button:disabled {
 
 .progress-panel,
 .timeline-panel,
+.player-panel,
 .result-box {
   padding: 22px;
   border-radius: 8px;
@@ -1078,6 +1109,22 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+.player-panel {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.74);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(18px);
+}
+
+.video-player {
+  display: block;
+  width: 100%;
+  max-height: min(62vh, 680px);
+  margin-top: 16px;
+  border-radius: 8px;
+  background: #020617;
+}
+
 .scene-list a {
   color: #5eead4;
   font-weight: 800;
@@ -1088,7 +1135,15 @@ button:disabled {
   color: #99f6e4;
 }
 
-.result-box a {
+.scene-list button {
+  min-height: 34px;
+  padding: 0 12px;
+  background: rgba(20, 184, 166, 0.18);
+  color: #ccfbf1;
+}
+
+.result-box a,
+.result-box button {
   display: inline-grid;
   place-items: center;
 }
@@ -1139,6 +1194,7 @@ button:disabled {
   .controls,
   .progress-copy,
   .section-heading,
+  .player-panel,
   .result-box {
     align-items: stretch;
     flex-direction: column;

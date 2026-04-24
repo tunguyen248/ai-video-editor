@@ -13,6 +13,7 @@ from core.utils import format_duration
 
 WHISPER_MODELS: dict[tuple[str, str], Any] = {}
 WHISPER_MODEL_LOCK = threading.Lock()
+WHISPER_TRANSCRIBE_LOCKS: dict[tuple[str, str], threading.Lock] = {}
 
 
 def normalize_whisper_device(device: str | None) -> str:
@@ -187,6 +188,7 @@ def load_whisper_model(device: str = "cpu", *, job_id: str | None = None, model_
             cached_model = whisper.load_model(model_name, device=device)
             elapsed_seconds = time.perf_counter() - started_at
             WHISPER_MODELS[cache_key] = cached_model
+            WHISPER_TRANSCRIBE_LOCKS.setdefault(cache_key, threading.Lock())
             _log_whisper_metric(
                 "Whisper model loaded",
                 job_id=job_id,
@@ -197,6 +199,7 @@ def load_whisper_model(device: str = "cpu", *, job_id: str | None = None, model_
                 vram_snapshot=get_cuda_vram_snapshot(device),
             )
         else:
+            WHISPER_TRANSCRIBE_LOCKS.setdefault(cache_key, threading.Lock())
             _log_whisper_metric(
                 "Whisper model reused from cache",
                 job_id=job_id,
@@ -207,6 +210,17 @@ def load_whisper_model(device: str = "cpu", *, job_id: str | None = None, model_
             )
 
         return cached_model
+
+
+def _get_transcribe_lock(model_name: str, device: str) -> threading.Lock:
+    cache_key = (model_name, device)
+    with WHISPER_MODEL_LOCK:
+        return WHISPER_TRANSCRIBE_LOCKS.setdefault(cache_key, threading.Lock())
+
+
+def _is_empty_decode_error(exc: RuntimeError) -> bool:
+    message = str(exc).lower()
+    return "cannot reshape tensor of 0 elements" in message and "shape [1, 0" in message
 
 
 def transcribe_with_metrics(
@@ -221,7 +235,52 @@ def transcribe_with_metrics(
     device = normalize_whisper_device(device)
     _reset_cuda_peak_memory(device)
     started_at = time.perf_counter()
-    transcription = model.transcribe(str(audio_path), fp16=device == "cuda", verbose=False)
+    transcribe_lock = _get_transcribe_lock(model_name, device)
+    try:
+        with transcribe_lock:
+            transcription = model.transcribe(str(audio_path), fp16=device == "cuda", verbose=False)
+    except RuntimeError as exc:
+        elapsed_seconds = time.perf_counter() - started_at
+        vram_snapshot = get_cuda_vram_snapshot(device)
+        if _is_empty_decode_error(exc):
+            _log_whisper_metric(
+                "Whisper returned an empty decode for this audio; treating chunk as no speech",
+                job_id=job_id,
+                model_name=model_name,
+                device=device,
+                context=context,
+                elapsed_seconds=elapsed_seconds,
+                vram_snapshot=vram_snapshot,
+                segment_count=0,
+            )
+            return {"segments": []}
+
+        extra: dict[str, Any] = {
+            "model_name": model_name,
+            "device": device,
+            "context": context,
+            "audio_path": str(audio_path),
+            "elapsed_seconds": round(elapsed_seconds, 3),
+        }
+        if vram_snapshot:
+            extra.update(
+                {
+                    "vram_allocated_mb": vram_snapshot["allocated_mb"],
+                    "vram_reserved_mb": vram_snapshot["reserved_mb"],
+                    "vram_peak_allocated_mb": vram_snapshot["peak_allocated_mb"],
+                }
+            )
+
+        get_logger("TranscriptionService", job_id).exception(
+            "Whisper transcription failed",
+            extra=extra,
+        )
+        raise RuntimeError(
+            f"Whisper transcription failed for {context}. "
+            "The model call is now serialized per device; retry this job. "
+            f"Original error: {exc}"
+        ) from exc
+
     elapsed_seconds = time.perf_counter() - started_at
     segments = transcription.get("segments", [])
     _log_whisper_metric(
