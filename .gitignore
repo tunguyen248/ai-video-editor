@@ -10,4 +10,5 @@ frontend/dist/
 output/
 temp/
 logs/*
+storage/transcripts/
 !logs/.gitkeep
