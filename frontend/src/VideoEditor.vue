@@ -1,200 +1,236 @@
 <template>
-  <main class="shell">
-    <section class="workspace">
-      <header class="masthead">
-        <div>
-          <p class="eyebrow">AI Video Editor</p>
-          <h1>Scene-to-hype reel studio</h1>
+  <div class="app">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+          <rect width="28" height="28" rx="8" fill="#E8FF47"/>
+          <path d="M8 10l6 4-6 4V10z" fill="#0A0A0A"/>
+          <rect x="16" y="10" width="4" height="8" rx="1" fill="#0A0A0A"/>
+        </svg>
+        <span class="logo-text">Reel</span>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button
+          v-for="tool in tools"
+          :key="tool.id"
+          class="nav-item"
+          :class="{ active: activeTool === tool.id }"
+          @click="activeTool = tool.id"
+          :title="tool.label"
+        >
+          <span class="nav-icon" v-html="tool.icon"></span>
+          <span class="nav-label">{{ tool.label }}</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="whisper-section">
+          <p class="section-label">Whisper</p>
+          <div class="toggle-row">
+            <button
+              class="device-btn"
+              :class="{ active: whisperDevice === 'cpu' }"
+              @click="whisperDevice = 'cpu'"
+              :disabled="isProcessing"
+            >CPU</button>
+            <button
+              class="device-btn"
+              :class="{ active: whisperDevice === 'gpu', unavailable: !gpuAvailable }"
+              @click="gpuAvailable && (whisperDevice = 'gpu')"
+              :disabled="isProcessing || !gpuAvailable"
+            >GPU</button>
+          </div>
+          <label class="chunk-toggle">
+            <input type="checkbox" v-model="smartChunking" :disabled="isProcessing" />
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            <span>Smart chunks</span>
+          </label>
+          <p class="hint-text" :class="{ warn: !gpuAvailable && whisperDevice === 'gpu' }">
+            {{ gpuAvailable ? 'CUDA ready' : 'CPU only' }}
+          </p>
         </div>
-        <div class="status-pill" :class="status">
-          <span class="status-dot"></span>
-          {{ statusLabel }}
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main">
+      <!-- Top bar -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <span class="breadcrumb">
+            {{ selectedFile ? selectedFile.name : 'No file selected' }}
+          </span>
+          <span class="status-badge" :class="status">
+            <span class="badge-dot"></span>
+            {{ statusLabel }}
+          </span>
+        </div>
+        <div class="topbar-actions">
+          <button class="action-btn primary" @click="detectScenes" :disabled="!selectedFile || isProcessing">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7h10M7 2l5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Detect Scenes
+          </button>
+          <button class="action-btn" @click="generateHypeReel" :disabled="!canGenerate">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M4 2l8 5-8 5V2z" fill="currentColor"/></svg>
+            Hype Reel
+          </button>
+          <button class="action-btn" @click="generateCaptions" :disabled="!canGenerateCaptions">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="1" y="4" width="12" height="6" rx="1.5" stroke="currentColor" stroke-width="1.5"/><path d="M4 7h2M7 7h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            Captions
+          </button>
+          <button class="action-btn accent" @click="detectKeyMoments" :disabled="!canGenerateCaptions">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1l1.5 4H13l-3.5 2.5 1.5 4L7 9l-4 2.5 1.5-4L1 5h4.5z" fill="currentColor"/></svg>
+            Key Moments
+          </button>
         </div>
       </header>
 
-      <section
-        class="drop-zone"
-        :class="{ active: selectedFile, working: isProcessing }"
-        @dragover.prevent="isDragging = true"
-        @dragleave.prevent="isDragging = false"
-        @drop.prevent="handleFileDrop"
-      >
-        <input
-          id="video-upload"
-          type="file"
-          accept="video/*"
-          @change="handleFileChange"
-          :disabled="isProcessing"
-        />
-        <label for="video-upload" class="upload-target" :class="{ dragging: isDragging }">
-          <span class="upload-icon">+</span>
-          <span>
-            <strong>{{ selectedFile ? selectedFile.name : 'Drop a video or choose a file' }}</strong>
-            <small>{{ selectedFileMeta }}</small>
-          </span>
-        </label>
-      </section>
-
-      <section class="controls">
-        <div class="whisper-controls">
-          <label class="device-select">
-            <span>Whisper</span>
-            <select v-model="whisperDevice" :disabled="isProcessing">
-              <option value="cpu">CPU</option>
-              <option value="gpu" :disabled="!gpuAvailable">{{ gpuOptionLabel }}</option>
-            </select>
+      <div class="canvas">
+        <!-- Upload zone -->
+        <div
+          class="upload-zone"
+          :class="{ 'has-file': selectedFile, dragging: isDragging, processing: isProcessing }"
+          @dragover.prevent="isDragging = true"
+          @dragleave.prevent="isDragging = false"
+          @drop.prevent="handleFileDrop"
+        >
+          <input id="video-upload" type="file" accept="video/*" @change="handleFileChange" :disabled="isProcessing" />
+          <label for="video-upload" class="upload-inner">
+            <div class="upload-graphic">
+              <div class="upload-ring">
+                <svg v-if="!selectedFile" width="32" height="32" viewBox="0 0 32 32" fill="none">
+                  <path d="M16 6v14M10 14l6-8 6 8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M6 24h20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+                <svg v-else width="32" height="32" viewBox="0 0 32 32" fill="none">
+                  <path d="M10 16l4 4 8-8" stroke="#E8FF47" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </div>
+            </div>
+            <div class="upload-copy">
+              <p class="upload-title">{{ selectedFile ? selectedFile.name : 'Drop your video here' }}</p>
+              <p class="upload-sub">{{ selectedFile ? formatFileSize(selectedFile.size) : 'MP4, MOV, MKV, AVI, WEBM up to 2GB' }}</p>
+            </div>
           </label>
-          <label class="chunking-toggle" :class="{ disabled: isProcessing }">
-            <input v-model="smartChunking" type="checkbox" :disabled="isProcessing" />
-            <span>Smart Chunking</span>
-          </label>
-          <p class="device-hint" :class="{ warning: !gpuAvailable }">
-            {{ deviceHint }}
-          </p>
-          <p class="chunking-hint">
-            {{ chunkingHint }}
-          </p>
         </div>
 
-        <button @click="detectScenes" :disabled="!selectedFile || isProcessing">
-          Detect Scenes
-        </button>
-
-        <button class="secondary" @click="generateHypeReel" :disabled="!canGenerate">
-          Generate Hype Reel
-        </button>
-
-        <button class="tertiary" @click="generateCaptions" :disabled="!canGenerateCaptions">
-          Generate Captions
-        </button>
-
-        <button class="quaternary" @click="detectKeyMoments" :disabled="!canGenerateCaptions">
-          Key Moments
-        </button>
-      </section>
-
-      <section class="progress-panel" :class="{ active: status !== 'idle' }">
-        <div class="progress-copy">
-          <div>
-            <p class="eyebrow">Status</p>
-            <h2>{{ progressTitle }}</h2>
+        <!-- Progress -->
+        <div class="progress-card" :class="{ visible: status !== 'idle' }">
+          <div class="progress-header">
+            <div>
+              <p class="card-label">{{ progressTitle }}</p>
+              <p class="progress-message">{{ statusMessage || 'Waiting…' }}</p>
+            </div>
+            <span class="progress-pct">{{ displayedProgress }}<em>%</em></span>
           </div>
-          <strong>{{ displayedProgress }}%</strong>
-        </div>
-
-        <div class="progress-track">
-          <div class="progress-fill" :style="{ width: `${displayedProgress}%` }"></div>
-          <span class="progress-glow" :style="{ left: `${displayedProgress}%` }"></span>
-        </div>
-
-        <div class="stage-strip">
-          <span
-            v-for="stage in stages"
-            :key="stage.key"
-            :class="{ current: currentStage === stage.key, done: stage.done }"
-          >
-            {{ stage.label }}
-          </span>
-        </div>
-
-        <p v-if="status === 'error'" class="error">{{ statusMessage }}</p>
-        <p v-else class="status-message">{{ statusMessage || 'Ready when you are.' }}</p>
-      </section>
-
-      <section v-if="activeVideoUrl" class="player-panel">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Preview</p>
-            <h2>{{ activeVideoTitle }}</h2>
+          <div class="progress-bar">
+            <div class="progress-fill" :style="{ width: displayedProgress + '%' }"></div>
           </div>
-        </div>
-        <video :key="activeVideoUrl" class="video-player" :src="activeVideoUrl" controls autoplay playsinline></video>
-      </section>
-
-      <section v-if="scenes.length > 0" class="timeline-panel">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Detected Scenes</p>
-            <h2>{{ scenes.length }} timestamp{{ scenes.length === 1 ? '' : 's' }}</h2>
+          <div class="stage-pills">
+            <span
+              v-for="stage in stages"
+              :key="stage.key"
+              class="pill"
+              :class="{ current: currentStage === stage.key, done: stage.done }"
+            >{{ stage.label }}</span>
           </div>
-          <span>{{ totalSceneSeconds }}s scanned</span>
+          <p v-if="status === 'error'" class="error-msg">{{ statusMessage }}</p>
         </div>
 
-        <div class="scene-rail">
-          <span
-            v-for="(scene, index) in timelineScenes"
-            :key="`${scene.start}-${scene.end}-${index}`"
-            class="scene-block"
-            :style="sceneStyle(scene, index)"
-            :title="`Scene ${index + 1}: ${formatSeconds(scene.start)}s to ${formatSeconds(scene.end)}s`"
-          ></span>
-        </div>
+        <!-- Two-column results -->
+        <div class="results-grid">
+          <!-- Video preview -->
+          <div class="result-card player-card" v-if="activeVideoUrl">
+            <div class="card-head">
+              <span class="card-label">Preview</span>
+              <span class="card-title">{{ activeVideoTitle }}</span>
+            </div>
+            <video :key="activeVideoUrl" :src="activeVideoUrl" controls autoplay playsinline class="video-el"></video>
+          </div>
 
-        <ol class="scene-list">
-          <li v-for="(scene, index) in visibleScenes" :key="`row-${scene.start}-${scene.end}-${index}`">
-            <span>Scene {{ index + 1 }}</span>
-            <strong>{{ formatSeconds(scene.start) }}s -> {{ formatSeconds(scene.end) }}s</strong>
-          </li>
-        </ol>
-        <p v-if="hiddenSceneCount > 0" class="scene-note">
-          Showing the first {{ visibleScenes.length }} scenes. {{ hiddenSceneCount }} more are hidden to keep the editor responsive.
-        </p>
-      </section>
+          <!-- Scenes timeline -->
+          <div class="result-card" v-if="scenes.length > 0">
+            <div class="card-head">
+              <span class="card-label">Detected Scenes</span>
+              <span class="card-title">{{ scenes.length }} cuts · {{ totalSceneSeconds }}s</span>
+            </div>
+            <div class="timeline-bar">
+              <span
+                v-for="(scene, i) in timelineScenes"
+                :key="i"
+                class="timeline-seg"
+                :style="sceneStyle(scene, i)"
+                :title="`${formatSeconds(scene.start)}s → ${formatSeconds(scene.end)}s`"
+              ></span>
+            </div>
+            <ol class="scene-list">
+              <li v-for="(scene, i) in visibleScenes" :key="i">
+                <span class="scene-num">{{ String(i + 1).padStart(2, '0') }}</span>
+                <span class="scene-range">{{ formatSeconds(scene.start) }}s → {{ formatSeconds(scene.end) }}s</span>
+                <span class="scene-dur">{{ (scene.end - scene.start).toFixed(1) }}s</span>
+              </li>
+            </ol>
+            <p v-if="hiddenSceneCount > 0" class="overflow-note">+{{ hiddenSceneCount }} more scenes not shown</p>
+          </div>
 
-      <section v-if="downloadUrl" class="result-box">
-        <div>
-          <p class="eyebrow">Result</p>
-          <h2>Hype reel ready</h2>
-        </div>
-        <button type="button" @click="playVideo(downloadUrl, 'Hype reel')">Open result</button>
-      </section>
+          <!-- Hype reel result -->
+          <div class="result-card output-card" v-if="downloadUrl || clipUrls.length > 0">
+            <div class="card-head">
+              <span class="card-label">Output</span>
+              <span class="card-title">{{ clipUrls.length > 1 ? `${clipUrls.length} clips` : 'Hype reel' }}</span>
+            </div>
+            <div class="output-actions">
+              <button v-if="downloadUrl" class="out-btn" @click="playVideo(downloadUrl, 'Hype reel')">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 2l7 4-7 4V2z" fill="currentColor"/></svg>
+                Play reel
+              </button>
+              <button
+                v-for="(url, i) in clipUrls.slice(0, 8)"
+                :key="url"
+                class="out-btn secondary"
+                @click="playVideo(url, `Clip ${i + 1}`)"
+              >Clip {{ i + 1 }}</button>
+            </div>
+          </div>
 
-      <section v-if="clipUrls.length > 0" class="result-box">
-        <div>
-          <p class="eyebrow">Clips</p>
-          <h2>{{ clipUrls.length }} clip{{ clipUrls.length === 1 ? '' : 's' }} ready</h2>
-        </div>
-        <div class="result-actions">
-          <button
-            v-for="(clipUrl, index) in clipUrls"
-            :key="clipUrl"
-            type="button"
-            @click="playVideo(clipUrl, `Clip ${index + 1}`)"
-          >
-            Open {{ index + 1 }}
-          </button>
-        </div>
-      </section>
+          <!-- Captions result -->
+          <div class="result-card output-card" v-if="captionedUrl">
+            <div class="card-head">
+              <span class="card-label">Captions</span>
+              <span class="card-title">{{ captionSegments.length }} segments</span>
+            </div>
+            <div class="output-actions">
+              <button class="out-btn" @click="playVideo(captionedUrl, 'Captioned video')">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 2l7 4-7 4V2z" fill="currentColor"/></svg>
+                Play captioned
+              </button>
+              <a v-if="srtUrl" class="out-btn secondary" :href="srtUrl" target="_blank">Download SRT</a>
+            </div>
+          </div>
 
-      <section v-if="captionedUrl" class="result-box">
-        <div>
-          <p class="eyebrow">Captions</p>
-          <h2>Captioned video ready</h2>
-        </div>
-        <div class="result-actions">
-          <button type="button" @click="playVideo(captionedUrl, 'Captioned video')">Open video</button>
-          <a v-if="srtUrl" class="quiet-link" :href="srtUrl" target="_blank" rel="noopener">Open SRT</a>
-        </div>
-      </section>
-
-      <section v-if="keyMoments.length > 0" class="timeline-panel">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Key Moments</p>
-            <h2>{{ keyMoments.length }} clip{{ keyMoments.length === 1 ? '' : 's' }}</h2>
+          <!-- Key moments -->
+          <div class="result-card moments-card" v-if="keyMoments.length > 0">
+            <div class="card-head">
+              <span class="card-label">Key Moments</span>
+              <span class="card-title">{{ keyMoments.length }} detected</span>
+            </div>
+            <ol class="moments-list">
+              <li v-for="(m, i) in keyMoments" :key="i">
+                <div class="moment-meta">
+                  <span class="moment-time">{{ formatSeconds(m.start) }}s – {{ formatSeconds(m.end) }}s</span>
+                  <span class="moment-score">{{ m.score }} pts</span>
+                </div>
+                <p class="moment-reason">{{ m.reason }}</p>
+                <button v-if="m.clipUrl" class="out-btn small" @click="playVideo(m.clipUrl, `Moment ${i+1}`)">Watch clip</button>
+              </li>
+            </ol>
           </div>
         </div>
-
-        <ol class="scene-list">
-          <li v-for="(moment, index) in keyMoments" :key="`moment-${moment.start}-${index}`">
-            <span>{{ formatSeconds(moment.start) }}s -> {{ formatSeconds(moment.end) }}s</span>
-            <button v-if="moment.clipUrl" type="button" @click="playVideo(moment.clipUrl, `Key moment ${index + 1}`)">Open clip</button>
-            <strong>{{ moment.score }} pts · {{ moment.reason }}</strong>
-          </li>
-        </ol>
-      </section>
-    </section>
-  </main>
+      </div>
+    </main>
+  </div>
 </template>
 
 <script setup>
@@ -205,7 +241,7 @@ const API_BASE = 'http://localhost:5000'
 const selectedFile = ref(null)
 const videoId = ref('')
 const scenes = ref([])
-const status = ref('idle') // idle | processing | complete | error
+const status = ref('idle')
 const statusMessage = ref('')
 const downloadUrl = ref('')
 const clipUrls = ref([])
@@ -222,49 +258,49 @@ const progress = ref(0)
 const activeJobType = ref('')
 const isDragging = ref(false)
 const pollTimer = ref(null)
+const activeTool = ref('scenes')
+
+const tools = [
+  {
+    id: 'scenes',
+    label: 'Scenes',
+    icon: '<svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="1" y="4" width="16" height="10" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M6 4v10" stroke="currentColor" stroke-width="1.5"/><path d="M12 4v10" stroke="currentColor" stroke-width="1.5"/></svg>'
+  },
+  {
+    id: 'moments',
+    label: 'Moments',
+    icon: '<svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M9 2l1.8 5H16l-4 2.9 1.6 5L9 11.5l-4.6 3.4 1.6-5L2 7h5.2z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>'
+  },
+  {
+    id: 'captions',
+    label: 'Captions',
+    icon: '<svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="2" y="5" width="14" height="8" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M5 9h4M5 11.5h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'
+  }
+]
 
 const isProcessing = computed(() => status.value === 'processing')
 const canGenerate = computed(() => Boolean(videoId.value && scenes.value.length > 0 && !isProcessing.value))
 const canGenerateCaptions = computed(() => Boolean(selectedFile.value && !isProcessing.value))
 const displayedProgress = computed(() => Math.round(progress.value))
-const gpuRuntime = computed(() => whisperCapabilities.value?.devices?.gpu ?? null)
-const gpuAvailable = computed(() => Boolean(gpuRuntime.value?.available))
-const gpuOptionLabel = computed(() => {
-  if (!whisperCapabilities.value) return 'GPU (checking...)'
-  return gpuAvailable.value ? 'GPU (CUDA)' : 'GPU unavailable'
-})
-const deviceHint = computed(() => {
-  if (!whisperCapabilities.value) {
-    return 'Checking whether CUDA acceleration is available on this machine.'
-  }
-  if (gpuAvailable.value) {
-    const names = gpuRuntime.value.device_names || []
-    return names.length > 0
-      ? `CUDA ready: ${names.join(', ')}`
-      : (gpuRuntime.value.reason || 'CUDA is available for Whisper.')
-  }
-  return gpuRuntime.value?.reason || 'GPU mode is not available right now.'
-})
-const chunkingHint = computed(() => (
-  smartChunking.value
-    ? 'Long Whisper runs will split the video into timed chunks for steadier progress updates.'
-    : 'Whisper will process the full audio in one pass. This is simpler, but progress updates will be less detailed.'
-))
-const statusLabel = computed(() => {
-  if (status.value === 'processing') return 'Processing'
-  if (status.value === 'complete') return 'Complete'
-  if (status.value === 'error') return 'Needs attention'
-  return 'Idle'
-})
+const gpuAvailable = computed(() => Boolean(whisperCapabilities.value?.devices?.gpu?.available))
+
+const statusLabel = computed(() => ({
+  processing: 'Processing',
+  complete: 'Complete',
+  error: 'Error',
+  idle: 'Ready'
+}[status.value] || 'Ready'))
+
 const progressTitle = computed(() => {
-  if (activeJobType.value === 'scene_analysis') return 'Analyzing scene cuts'
-  if (activeJobType.value === 'smart_cut') return 'Building the hype reel'
-  if (activeJobType.value === 'captions') return 'Generating burned-in captions'
-  if (activeJobType.value === 'key_moments') return 'Detecting key moments'
-  if (status.value === 'complete') return 'Ready'
-  if (status.value === 'error') return 'Paused'
-  return 'Waiting for a video'
+  const map = {
+    scene_analysis: 'Analyzing scene cuts',
+    smart_cut: 'Building hype reel',
+    captions: 'Generating captions',
+    key_moments: 'Detecting key moments'
+  }
+  return map[activeJobType.value] || (status.value === 'complete' ? 'Complete' : 'Idle')
 })
+
 const currentStage = computed(() => {
   if (status.value === 'error') return 'error'
   if (status.value === 'complete') return 'complete'
@@ -287,10 +323,11 @@ const currentStage = computed(() => {
   if (activeJobType.value === 'scene_analysis') return progress.value >= 92 ? 'timeline' : 'scan'
   return 'upload'
 })
+
 const stages = computed(() => {
   if (activeJobType.value === 'key_moments') {
-    const momentOrder = ['extract', 'peaks', 'model', 'transcribe', 'visual', 'score', 'complete']
-    const momentIndex = momentOrder.indexOf(currentStage.value)
+    const order = ['extract','peaks','model','transcribe','visual','score','complete']
+    const idx = order.indexOf(currentStage.value)
     return [
       { key: 'extract', label: 'Audio' },
       { key: 'peaks', label: 'Peaks' },
@@ -299,15 +336,11 @@ const stages = computed(() => {
       { key: 'visual', label: 'Scenes' },
       { key: 'score', label: 'Score' },
       { key: 'complete', label: 'Done' },
-    ].map((stage, index) => ({
-      ...stage,
-      done: momentIndex > index || status.value === 'complete',
-    }))
+    ].map((s, i) => ({ ...s, done: idx > i || status.value === 'complete' }))
   }
-
   if (activeJobType.value === 'captions') {
-    const captionOrder = ['extract', 'model', 'transcribe', 'srt', 'burn', 'complete']
-    const captionIndex = captionOrder.indexOf(currentStage.value)
+    const order = ['extract','model','transcribe','srt','burn','complete']
+    const idx = order.indexOf(currentStage.value)
     return [
       { key: 'extract', label: 'Audio' },
       { key: 'model', label: 'Model' },
@@ -315,14 +348,10 @@ const stages = computed(() => {
       { key: 'srt', label: 'SRT' },
       { key: 'burn', label: 'Burn' },
       { key: 'complete', label: 'Done' },
-    ].map((stage, index) => ({
-      ...stage,
-      done: captionIndex > index || status.value === 'complete',
-    }))
+    ].map((s, i) => ({ ...s, done: idx > i || status.value === 'complete' }))
   }
-
-  const stageOrder = ['upload', 'scan', 'timeline', 'render', 'stitch', 'complete']
-  const activeIndex = stageOrder.indexOf(currentStage.value)
+  const order = ['upload','scan','timeline','render','stitch','complete']
+  const idx = order.indexOf(currentStage.value)
   return [
     { key: 'upload', label: 'Upload' },
     { key: 'scan', label: 'Scan' },
@@ -330,888 +359,795 @@ const stages = computed(() => {
     { key: 'render', label: 'Render' },
     { key: 'stitch', label: 'Stitch' },
     { key: 'complete', label: 'Done' },
-  ].map((stage, index) => ({
-    ...stage,
-    done: activeIndex > index || status.value === 'complete',
-  }))
+  ].map((s, i) => ({ ...s, done: idx > i || status.value === 'complete' }))
 })
-const selectedFileMeta = computed(() => {
-  if (!selectedFile.value) return 'MP4, MOV, MKV, AVI, WEBM, or M4V'
-  return `${(selectedFile.value.size / 1024 / 1024).toFixed(1)} MB`
-})
+
 const totalSceneSeconds = computed(() => {
-  const lastScene = scenes.value[scenes.value.length - 1]
-  return lastScene ? formatSeconds(lastScene.end) : '0.000'
+  const last = scenes.value[scenes.value.length - 1]
+  return last ? formatSeconds(last.end) : '0.000'
 })
-const visibleScenes = computed(() => scenes.value.slice(0, 240))
+const visibleScenes = computed(() => scenes.value.slice(0, 200))
 const timelineScenes = computed(() => scenes.value.slice(0, 360))
 const hiddenSceneCount = computed(() => Math.max(0, scenes.value.length - visibleScenes.value.length))
+
+const formatSeconds = v => Number(v).toFixed(3)
+const formatFileSize = bytes => {
+  if (bytes >= 1024 * 1024 * 1024) return (bytes / 1024 / 1024 / 1024).toFixed(1) + ' GB'
+  return (bytes / 1024 / 1024).toFixed(1) + ' MB'
+}
 
 onBeforeUnmount(() => clearPollTimer())
 
 const clearPollTimer = () => {
-  if (pollTimer.value) {
-    window.clearTimeout(pollTimer.value)
-    pollTimer.value = null
-  }
+  if (pollTimer.value) { window.clearTimeout(pollTimer.value); pollTimer.value = null }
 }
+const resetJobState = () => { clearPollTimer(); progress.value = 0; activeJobType.value = ''; statusMessage.value = '' }
 
-const resetJobState = () => {
-  clearPollTimer()
-  progress.value = 0
-  activeJobType.value = ''
-  statusMessage.value = ''
-}
+const handleFileChange = e => setSelectedFile(e.target.files?.[0] ?? null)
+const handleFileDrop = e => { isDragging.value = false; if (!isProcessing.value) setSelectedFile(e.dataTransfer.files?.[0] ?? null) }
 
-const handleFileChange = (event) => {
-  setSelectedFile(event.target.files?.[0] ?? null)
-}
-
-const handleFileDrop = (event) => {
-  isDragging.value = false
-  if (isProcessing.value) return
-  setSelectedFile(event.dataTransfer.files?.[0] ?? null)
-}
-
-const setSelectedFile = (file) => {
+const setSelectedFile = file => {
   selectedFile.value = file
-  videoId.value = ''
-  scenes.value = []
-  downloadUrl.value = ''
-  clipUrls.value = []
-  activeVideoUrl.value = ''
-  activeVideoTitle.value = 'Preview'
-  captionedUrl.value = ''
-  srtUrl.value = ''
-  captionSegments.value = []
-  keyMoments.value = []
-  status.value = 'idle'
-  resetJobState()
+  videoId.value = ''; scenes.value = []; downloadUrl.value = ''; clipUrls.value = []
+  activeVideoUrl.value = ''; activeVideoTitle.value = 'Preview'; captionedUrl.value = ''
+  srtUrl.value = ''; captionSegments.value = []; keyMoments.value = []
+  status.value = 'idle'; resetJobState()
 }
 
 const detectScenes = async () => {
-  if (!selectedFile.value) {
-    setError('Please select a video file first.')
-    return
-  }
-
-  status.value = 'processing'
-  activeJobType.value = 'scene_analysis'
-  progress.value = 2
-  statusMessage.value = 'Uploading video'
-  downloadUrl.value = ''
-  clipUrls.value = []
-  activeVideoUrl.value = ''
-  activeVideoTitle.value = 'Preview'
-  scenes.value = []
-
-  const formData = new FormData()
-  formData.append('video', selectedFile.value)
-
+  if (!selectedFile.value) return setError('Select a video first.')
+  status.value = 'processing'; activeJobType.value = 'scene_analysis'; progress.value = 2
+  statusMessage.value = 'Uploading video'; scenes.value = []
+  const fd = new FormData(); fd.append('video', selectedFile.value)
   try {
-    const payload = await startRequest('/analyze_scenes', {
-      method: 'POST',
-      body: formData,
-    })
-
-    await waitForJob(payload.job_id, (result) => {
+    const payload = await startRequest('/analyze_scenes', { method: 'POST', body: fd })
+    await waitForJob(payload.job_id, result => {
       videoId.value = result.video_id
       scenes.value = Array.isArray(result.scenes) ? result.scenes : []
-      status.value = 'complete'
-      activeJobType.value = ''
-      progress.value = 100
+      status.value = 'complete'; activeJobType.value = ''; progress.value = 100
       statusMessage.value = `Detected ${scenes.value.length} scene(s).`
     })
-  } catch (error) {
-    setError(error.message || 'Unexpected error while detecting scenes.')
-  }
-}
-
-const detectKeyMoments = async () => {
-  if (!selectedFile.value) {
-    setError('Please select a video file first.')
-    return
-  }
-
-  status.value = 'processing'
-  activeJobType.value = 'key_moments'
-  progress.value = 4
-  statusMessage.value = `Uploading video for key moment detection on ${whisperDevice.value.toUpperCase()}${smartChunking.value ? ' with smart chunking' : ''}`
-  keyMoments.value = []
-  clipUrls.value = []
-  activeVideoUrl.value = ''
-  activeVideoTitle.value = 'Preview'
-
-  const formData = new FormData()
-  formData.append('video', selectedFile.value)
-  formData.append('device', whisperDevice.value)
-  formData.append('use_chunking', String(smartChunking.value))
-
-  try {
-    const payload = await startRequest('/detect_key_moments', {
-      method: 'POST',
-      body: formData,
-    })
-
-    await waitForJob(payload.job_id, (result) => {
-      keyMoments.value = Array.isArray(result.moments)
-        ? result.moments.map((moment) => ({
-            ...moment,
-            clipUrl: moment.clip_path ? `${API_BASE}${moment.clip_path}` : '',
-          }))
-        : []
-      clipUrls.value = Array.isArray(result.clip_paths)
-        ? result.clip_paths.map((path) => `${API_BASE}${path}`)
-        : keyMoments.value.map((moment) => moment.clipUrl).filter(Boolean)
-      status.value = 'complete'
-      activeJobType.value = ''
-      progress.value = 100
-      statusMessage.value = `Detected ${keyMoments.value.length} key moment(s) and generated ${clipUrls.value.length} clip(s).`
-    })
-  } catch (error) {
-    setError(error.message || 'Unexpected error while detecting key moments.')
-  }
+  } catch (e) { setError(e.message || 'Scene detection failed.') }
 }
 
 const generateHypeReel = async () => {
-  if (!videoId.value || scenes.value.length === 0) {
-    setError('Detect scenes first before generating the hype reel.')
-    return
-  }
-
-  status.value = 'processing'
-  activeJobType.value = 'smart_cut'
-  progress.value = 3
-  statusMessage.value = 'Starting render'
-  downloadUrl.value = ''
-  clipUrls.value = []
-  activeVideoUrl.value = ''
-  activeVideoTitle.value = 'Preview'
-
+  if (!videoId.value || !scenes.value.length) return setError('Detect scenes first.')
+  status.value = 'processing'; activeJobType.value = 'smart_cut'; progress.value = 3
+  statusMessage.value = 'Starting render'; downloadUrl.value = ''; clipUrls.value = []
   try {
-    const payload = await startRequest('/smart_cut', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        video_id: videoId.value,
-        scenes: scenes.value,
-      }),
-    })
-
-    await waitForJob(payload.job_id, (result) => {
-      clipUrls.value = Array.isArray(result.clip_paths)
-        ? result.clip_paths.map((path) => `${API_BASE}${path}`)
-        : []
+    const payload = await startRequest('/smart_cut', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ video_id: videoId.value, scenes: scenes.value }) })
+    await waitForJob(payload.job_id, result => {
+      clipUrls.value = Array.isArray(result.clip_paths) ? result.clip_paths.map(p => `${API_BASE}${p}`) : []
       downloadUrl.value = result.hype_reel_path ? `${API_BASE}${result.hype_reel_path}` : ''
-      status.value = 'complete'
-      activeJobType.value = ''
-      progress.value = 100
-      statusMessage.value = `Generated ${clipUrls.value.length || 1} hype clip(s).`
+      status.value = 'complete'; activeJobType.value = ''; progress.value = 100
+      statusMessage.value = `Generated ${clipUrls.value.length || 1} clip(s).`
     })
-  } catch (error) {
-    setError(error.message || 'Unexpected error while generating hype reel.')
-  }
+  } catch (e) { setError(e.message || 'Hype reel failed.') }
 }
 
 const generateCaptions = async () => {
-  if (!selectedFile.value) {
-    setError('Please select a video file first.')
-    return
-  }
-
-  status.value = 'processing'
-  activeJobType.value = 'captions'
-  progress.value = 4
-  statusMessage.value = `Uploading video for captions on ${whisperDevice.value.toUpperCase()}${smartChunking.value ? ' with smart chunking' : ''}`
-  captionedUrl.value = ''
-  srtUrl.value = ''
-  captionSegments.value = []
-  activeVideoUrl.value = ''
-  activeVideoTitle.value = 'Preview'
-
-  const formData = new FormData()
-  formData.append('video', selectedFile.value)
-  formData.append('device', whisperDevice.value)
-  formData.append('use_chunking', String(smartChunking.value))
-
+  if (!selectedFile.value) return setError('Select a video first.')
+  status.value = 'processing'; activeJobType.value = 'captions'; progress.value = 4
+  statusMessage.value = 'Uploading for captions'; captionedUrl.value = ''; srtUrl.value = ''; captionSegments.value = []
+  const fd = new FormData(); fd.append('video', selectedFile.value); fd.append('device', whisperDevice.value); fd.append('use_chunking', String(smartChunking.value))
   try {
-    const payload = await startRequest('/generate_captions', {
-      method: 'POST',
-      body: formData,
-    })
-
-    await waitForJob(payload.job_id, (result) => {
+    const payload = await startRequest('/generate_captions', { method: 'POST', body: fd })
+    await waitForJob(payload.job_id, result => {
       captionedUrl.value = `${API_BASE}${result.captioned_video_path}`
       srtUrl.value = `${API_BASE}${result.srt_path}`
       captionSegments.value = Array.isArray(result.segments) ? result.segments : []
-      status.value = 'complete'
-      activeJobType.value = ''
-      progress.value = 100
-      statusMessage.value = `Generated ${captionSegments.value.length} caption segment(s).`
+      status.value = 'complete'; activeJobType.value = ''; progress.value = 100
+      statusMessage.value = `Generated ${captionSegments.value.length} segment(s).`
     })
-  } catch (error) {
-    setError(error.message || 'Unexpected error while generating captions.')
-  }
+  } catch (e) { setError(e.message || 'Caption generation failed.') }
 }
 
-const startRequest = async (path, options) => {
-  const response = await fetch(`${API_BASE}${path}`, options)
-  const payload = await response.json()
-  if (!response.ok) {
-    throw new Error(payload.error || 'Request failed.')
-  }
-  return payload
+const detectKeyMoments = async () => {
+  if (!selectedFile.value) return setError('Select a video first.')
+  status.value = 'processing'; activeJobType.value = 'key_moments'; progress.value = 4
+  statusMessage.value = 'Uploading for key moment detection'; keyMoments.value = []; clipUrls.value = []
+  const fd = new FormData(); fd.append('video', selectedFile.value); fd.append('device', whisperDevice.value); fd.append('use_chunking', String(smartChunking.value))
+  try {
+    const payload = await startRequest('/detect_key_moments', { method: 'POST', body: fd })
+    await waitForJob(payload.job_id, result => {
+      keyMoments.value = Array.isArray(result.moments) ? result.moments.map(m => ({ ...m, clipUrl: m.clip_path ? `${API_BASE}${m.clip_path}` : '' })) : []
+      clipUrls.value = Array.isArray(result.clip_paths) ? result.clip_paths.map(p => `${API_BASE}${p}`) : keyMoments.value.map(m => m.clipUrl).filter(Boolean)
+      status.value = 'complete'; activeJobType.value = ''; progress.value = 100
+      statusMessage.value = `Detected ${keyMoments.value.length} moment(s).`
+    })
+  } catch (e) { setError(e.message || 'Key moment detection failed.') }
 }
 
-const playVideo = (url, title = 'Preview') => {
-  if (!url) return
-  activeVideoUrl.value = url
-  activeVideoTitle.value = title
+const startRequest = async (path, opts) => {
+  const res = await fetch(`${API_BASE}${path}`, opts)
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Request failed.')
+  return data
 }
+
+const playVideo = (url, title = 'Preview') => { if (url) { activeVideoUrl.value = url; activeVideoTitle.value = title } }
 
 const loadWhisperCapabilities = async () => {
   try {
-    const response = await fetch(`${API_BASE}/whisper_capabilities`)
-    const payload = await response.json()
-    if (!response.ok) throw new Error(payload.error || 'Capability check failed.')
-    whisperCapabilities.value = payload
-    if (!payload.devices?.gpu?.available && whisperDevice.value === 'gpu') {
-      whisperDevice.value = 'cpu'
-    }
-  } catch (error) {
-    whisperCapabilities.value = {
-      devices: {
-        gpu: {
-          available: false,
-          reason: error.message || 'Unable to verify CUDA availability.',
-          device_names: [],
-        },
-      },
-    }
-    whisperDevice.value = 'cpu'
+    const res = await fetch(`${API_BASE}/whisper_capabilities`)
+    const data = await res.json()
+    whisperCapabilities.value = data
+    if (!data.devices?.gpu?.available && whisperDevice.value === 'gpu') whisperDevice.value = 'cpu'
+  } catch {
+    whisperCapabilities.value = { devices: { gpu: { available: false } } }
   }
 }
 
 const waitForJob = (jobId, onComplete) => new Promise((resolve, reject) => {
   const poll = async () => {
     try {
-      const response = await fetch(`${API_BASE}/job_status/${jobId}`)
-      const job = await response.json()
-      if (!response.ok) throw new Error(job.error || 'Could not read job status.')
-
+      const res = await fetch(`${API_BASE}/job_status/${jobId}`)
+      const job = await res.json()
+      if (!res.ok) throw new Error(job.error || 'Status check failed.')
       progress.value = Number(job.progress ?? progress.value)
       statusMessage.value = job.message || statusMessage.value
-
-      if (job.state === 'complete') {
-        clearPollTimer()
-        onComplete(job.result || {})
-        resolve(job.result || {})
-        return
-      }
-
-      if (job.state === 'error') {
-        clearPollTimer()
-        reject(new Error(job.error || job.message || 'Processing failed.'))
-        return
-      }
-
+      if (job.state === 'complete') { clearPollTimer(); onComplete(job.result || {}); resolve(job.result || {}); return }
+      if (job.state === 'error') { clearPollTimer(); reject(new Error(job.error || job.message || 'Processing failed.')); return }
       pollTimer.value = window.setTimeout(poll, 450)
-    } catch (error) {
-      clearPollTimer()
-      reject(error)
-    }
+    } catch (e) { clearPollTimer(); reject(e) }
   }
-
   poll()
 })
 
-const setError = (message) => {
-  status.value = 'error'
-  activeJobType.value = ''
-  progress.value = 100
-  statusMessage.value = message
-}
+const setError = msg => { status.value = 'error'; activeJobType.value = ''; progress.value = 100; statusMessage.value = msg }
 
-const sceneStyle = (scene, index) => {
+const sceneStyle = (scene, i) => {
   const total = Number(scenes.value[scenes.value.length - 1]?.end || 1)
   const start = Math.max(0, (Number(scene.start) / total) * 100)
-  const width = Math.max(1.5, ((Number(scene.end) - Number(scene.start)) / total) * 100)
-  return {
-    left: `${start}%`,
-    width: `${Math.min(width, 100 - start)}%`,
-    animationDelay: `${index * 45}ms`,
-  }
+  const width = Math.max(0.5, ((Number(scene.end) - Number(scene.start)) / total) * 100)
+  return { left: `${start}%`, width: `${Math.min(width, 100 - start)}%`, animationDelay: `${i * 20}ms` }
 }
 
-const formatSeconds = (value) => Number(value).toFixed(3)
-
-onMounted(() => {
-  loadWhisperCapabilities()
-})
+onMounted(loadWhisperCapabilities)
 </script>
 
 <style scoped>
-:global(*) {
-  box-sizing: border-box;
-}
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=DM+Mono:wght@400;500&display=swap');
+
+:global(*) { box-sizing: border-box; margin: 0; padding: 0; }
 
 :global(body) {
-  margin: 0;
-  background: #0f172a;
-  color: #e5e7eb;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #F5F4F0;
+  color: #1A1A1A;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
-.shell {
+/* ── Layout ── */
+.app {
+  display: flex;
   min-height: 100vh;
-  padding: 32px;
-  background:
-    radial-gradient(circle at top left, rgba(20, 184, 166, 0.18), transparent 34%),
-    linear-gradient(135deg, #101828 0%, #111827 48%, #172033 100%);
 }
 
-.workspace {
-  width: min(1040px, 100%);
-  margin: 0 auto;
-  display: grid;
-  gap: 18px;
-}
-
-.masthead,
-.controls,
-.progress-panel,
-.timeline-panel,
-.player-panel,
-.result-box,
-.drop-zone {
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(15, 23, 42, 0.74);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.24);
-  backdrop-filter: blur(18px);
-}
-
-.masthead {
+/* ── Sidebar ── */
+.sidebar {
+  width: 200px;
+  flex-shrink: 0;
+  background: #1A1A1A;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 28px;
-  border-radius: 8px;
+  flex-direction: column;
+  padding: 20px 0;
+  position: sticky;
+  top: 0;
+  height: 100vh;
 }
 
-.eyebrow {
-  margin: 0 0 6px;
-  color: #5eead4;
-  font-size: 0.73rem;
-  font-weight: 800;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
-h1,
-h2 {
-  margin: 0;
-  letter-spacing: 0;
-}
-
-h1 {
-  font-size: clamp(2rem, 7vw, 4.5rem);
-  line-height: 0.98;
-}
-
-h2 {
-  font-size: 1.25rem;
-}
-
-.status-pill {
-  min-width: 128px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 9px;
-  padding: 10px 14px;
-  border-radius: 999px;
-  background: rgba(30, 41, 59, 0.95);
-  color: #cbd5e1;
-  font-weight: 800;
-}
-
-.status-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 999px;
-  background: #94a3b8;
-}
-
-.status-pill.processing .status-dot {
-  background: #22c55e;
-  box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.55);
-  animation: pulse 1.1s infinite;
-}
-
-.status-pill.complete .status-dot {
-  background: #5eead4;
-}
-
-.status-pill.error .status-dot {
-  background: #fb7185;
-}
-
-.drop-zone {
-  border-radius: 8px;
-  padding: 16px;
-  transition: transform 180ms ease, border-color 180ms ease;
-}
-
-.drop-zone.working {
-  border-color: rgba(94, 234, 212, 0.55);
-}
-
-input[type="file"] {
-  position: absolute;
-  inline-size: 1px;
-  block-size: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.upload-target {
-  min-height: 116px;
+.sidebar-logo {
   display: flex;
-  align-items: center;
-  gap: 18px;
-  padding: 20px;
-  border: 1px dashed rgba(148, 163, 184, 0.44);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 180ms ease, border-color 180ms ease, transform 180ms ease;
-}
-
-.upload-target.dragging,
-.upload-target:hover {
-  border-color: #5eead4;
-  background: rgba(20, 184, 166, 0.08);
-  transform: translateY(-1px);
-}
-
-.upload-icon {
-  width: 52px;
-  height: 52px;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  background: #14b8a6;
-  color: #052e2b;
-  font-size: 2rem;
-  font-weight: 800;
-}
-
-.upload-target strong,
-.upload-target small {
-  display: block;
-}
-
-.upload-target strong {
-  max-width: 72vw;
-  overflow-wrap: anywhere;
-  font-size: 1rem;
-}
-
-.upload-target small {
-  margin-top: 5px;
-  color: #94a3b8;
-}
-
-.controls {
-  display: flex;
-  gap: 12px;
-  padding: 16px;
-  border-radius: 8px;
-}
-
-button,
-.result-box a,
-.result-box button {
-  min-height: 44px;
-  padding: 0 18px;
-  border: 0;
-  border-radius: 8px;
-  background: #2dd4bf;
-  color: #042f2e;
-  font: inherit;
-  font-weight: 900;
-  cursor: pointer;
-  text-decoration: none;
-  transition: transform 160ms ease, opacity 160ms ease, background 160ms ease;
-}
-
-button:hover,
-.result-box a:hover,
-.result-box button:hover {
-  transform: translateY(-1px);
-}
-
-button.secondary {
-  background: #f59e0b;
-  color: #271806;
-}
-
-button.tertiary {
-  background: #a3e635;
-  color: #1a2e05;
-}
-
-button.quaternary {
-  background: #38bdf8;
-  color: #082f49;
-}
-
-.device-select {
-  min-height: 44px;
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  padding: 0 12px;
-  border-radius: 8px;
-  background: rgba(30, 41, 59, 0.8);
-  color: #cbd5e1;
-  font-weight: 800;
-}
-
-.whisper-controls {
-  display: grid;
-  gap: 8px;
-}
-
-.chunking-toggle {
-  min-height: 44px;
-  display: inline-flex;
   align-items: center;
   gap: 10px;
-  padding: 0 12px;
+  padding: 0 20px 24px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.logo-text {
+  font-size: 18px;
+  font-weight: 600;
+  color: #FFFFFF;
+  letter-spacing: -0.3px;
+}
+
+.sidebar-nav {
+  flex: 1;
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  color: rgba(255,255,255,0.45);
   border-radius: 8px;
-  background: rgba(30, 41, 59, 0.8);
-  color: #cbd5e1;
-  font-weight: 800;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  transition: background 150ms, color 150ms;
 }
 
-.chunking-toggle.disabled {
-  opacity: 0.6;
+.nav-item:hover { background: rgba(255,255,255,0.07); color: rgba(255,255,255,0.75); }
+.nav-item.active { background: rgba(232,255,71,0.15); color: #E8FF47; }
+.nav-icon { flex-shrink: 0; opacity: 0.8; }
+.nav-item.active .nav-icon { opacity: 1; }
+
+.sidebar-bottom {
+  padding: 16px;
+  border-top: 1px solid rgba(255,255,255,0.08);
 }
 
-.chunking-toggle input {
-  width: 16px;
-  height: 16px;
-  accent-color: #14b8a6;
-}
-
-.device-hint {
-  margin: 0;
-  color: #94a3b8;
-  font-size: 0.82rem;
-}
-
-.chunking-hint {
-  margin: 0;
-  color: #94a3b8;
-  font-size: 0.82rem;
-}
-
-.device-hint.warning {
-  color: #fbbf24;
-}
-
-.device-select span {
-  font-size: 0.78rem;
+.section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
+  color: rgba(255,255,255,0.3);
+  margin-bottom: 10px;
 }
 
-.device-select select {
-  min-height: 30px;
-  border: 1px solid rgba(148, 163, 184, 0.3);
+.toggle-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.device-btn {
+  flex: 1;
+  padding: 6px 0;
   border-radius: 6px;
-  background: #0f172a;
-  color: #f8fafc;
-  font: inherit;
-  font-weight: 800;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: transparent;
+  color: rgba(255,255,255,0.45);
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 150ms;
 }
 
-button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-  transform: none;
+.device-btn.active {
+  background: #E8FF47;
+  color: #1A1A1A;
+  border-color: #E8FF47;
+  font-weight: 600;
 }
 
-.progress-panel,
-.timeline-panel,
-.player-panel,
-.result-box {
-  padding: 22px;
-  border-radius: 8px;
+.device-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.chunk-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: rgba(255,255,255,0.5);
+  font-size: 12px;
+  margin-bottom: 8px;
 }
 
-.progress-panel {
+.chunk-toggle input { display: none; }
+
+.toggle-track {
+  width: 30px;
+  height: 17px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 999px;
   position: relative;
-  overflow: hidden;
+  flex-shrink: 0;
+  transition: background 200ms;
 }
 
-.progress-panel.active::before {
-  content: "";
+.toggle-thumb {
   position: absolute;
-  inset: 0;
-  background: linear-gradient(110deg, transparent 0%, rgba(94, 234, 212, 0.09) 48%, transparent 58%);
-  transform: translateX(-100%);
-  animation: sweep 2.2s infinite;
+  width: 13px;
+  height: 13px;
+  background: white;
+  border-radius: 999px;
+  top: 2px;
+  left: 2px;
+  transition: left 200ms;
 }
 
-.progress-copy,
-.section-heading,
-.result-box {
+.chunk-toggle input:checked + .toggle-track { background: #E8FF47; }
+.chunk-toggle input:checked + .toggle-track .toggle-thumb { left: 15px; background: #1A1A1A; }
+
+.hint-text {
+  font-size: 11px;
+  color: rgba(255,255,255,0.25);
+}
+
+.hint-text.warn { color: #FF8A50; }
+
+/* ── Main ── */
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* ── Topbar ── */
+.topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  padding: 14px 24px;
+  background: #FFFFFF;
+  border-bottom: 1px solid #E8E6E1;
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 
-.progress-copy {
-  position: relative;
-  z-index: 1;
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
 }
 
-.progress-copy strong {
-  font-size: 2rem;
-  color: #f8fafc;
-}
-
-.progress-track {
-  position: relative;
-  height: 14px;
-  margin: 18px 0;
+.breadcrumb {
+  font-size: 13px;
+  color: #6B6860;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+  font-family: 'DM Mono', monospace;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
   border-radius: 999px;
-  background: rgba(51, 65, 85, 0.9);
+  font-size: 12px;
+  font-weight: 500;
+  background: #F0EEE8;
+  color: #6B6860;
+  flex-shrink: 0;
+}
+
+.badge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #C4C0B8;
+}
+
+.status-badge.processing { background: #FFF8E8; color: #92600A; }
+.status-badge.processing .badge-dot { background: #F5A623; animation: pulse 1.2s infinite; }
+.status-badge.complete { background: #EDFAF3; color: #1A7A47; }
+.status-badge.complete .badge-dot { background: #2ECC72; }
+.status-badge.error { background: #FEF0F0; color: #B91C1C; }
+.status-badge.error .badge-dot { background: #EF4444; }
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid #E0DDD6;
+  background: #FFFFFF;
+  color: #1A1A1A;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 150ms;
+  white-space: nowrap;
+}
+
+.action-btn:hover { background: #F5F4F0; border-color: #C4C0B8; }
+.action-btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
+
+.action-btn.primary {
+  background: #1A1A1A;
+  color: #FFFFFF;
+  border-color: #1A1A1A;
+}
+.action-btn.primary:hover:not(:disabled) { background: #333; border-color: #333; }
+
+.action-btn.accent {
+  background: #E8FF47;
+  color: #1A1A1A;
+  border-color: #D4EB00;
+}
+.action-btn.accent:hover:not(:disabled) { background: #DEFF00; }
+
+/* ── Canvas ── */
+.canvas {
+  flex: 1;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ── Upload zone ── */
+.upload-zone {
+  background: #FFFFFF;
+  border: 1.5px dashed #D4D1C8;
+  border-radius: 12px;
+  transition: border-color 200ms, background 200ms;
+}
+
+.upload-zone.has-file { border-style: solid; border-color: #1A1A1A; }
+.upload-zone.dragging { border-color: #E8FF47; background: #FFFFEE; }
+.upload-zone.processing { opacity: 0.6; pointer-events: none; }
+
+#video-upload { display: none; }
+
+.upload-inner {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 24px 28px;
+  cursor: pointer;
+}
+
+.upload-ring {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #F5F4F0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #6B6860;
+}
+
+.upload-zone.has-file .upload-ring {
+  background: #1A1A1A;
+  color: white;
+}
+
+.upload-title {
+  font-size: 15px;
+  font-weight: 500;
+  color: #1A1A1A;
+  margin-bottom: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 480px;
+}
+
+.upload-sub {
+  font-size: 12.5px;
+  color: #9B978E;
+}
+
+/* ── Progress card ── */
+.progress-card {
+  background: #FFFFFF;
+  border: 1px solid #E8E6E1;
+  border-radius: 12px;
+  padding: 20px 24px;
+  display: none;
+}
+
+.progress-card.visible { display: block; }
+
+.progress-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.card-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #9B978E;
+  margin-bottom: 3px;
+}
+
+.progress-message {
+  font-size: 14px;
+  color: #1A1A1A;
+  font-weight: 500;
+}
+
+.progress-pct {
+  font-size: 36px;
+  font-weight: 300;
+  color: #1A1A1A;
+  font-family: 'DM Sans', sans-serif;
+  line-height: 1;
+}
+
+.progress-pct em {
+  font-size: 16px;
+  font-style: normal;
+  color: #9B978E;
+  margin-left: 2px;
+}
+
+.progress-bar {
+  height: 4px;
+  background: #F0EEE8;
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 14px;
 }
 
 .progress-fill {
   height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, #14b8a6, #a3e635, #f59e0b);
-  transition: width 380ms ease;
-}
-
-.progress-glow {
-  position: absolute;
-  top: 50%;
-  width: 28px;
-  height: 28px;
+  background: #1A1A1A;
   border-radius: 999px;
-  background: rgba(250, 204, 21, 0.68);
-  filter: blur(10px);
-  transform: translate(-50%, -50%);
-  transition: left 380ms ease;
+  transition: width 350ms ease;
 }
 
-.stage-strip {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 8px;
+.stage-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
-.stage-strip span {
-  min-height: 34px;
-  display: grid;
-  place-items: center;
+.pill {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #F5F4F0;
+  color: #9B978E;
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.pill.current {
+  background: #1A1A1A;
+  color: #FFFFFF;
+}
+
+.pill.done {
+  background: #EDFAF3;
+  color: #1A7A47;
+}
+
+.error-msg {
+  margin-top: 12px;
+  font-size: 13px;
+  color: #B91C1C;
+  padding: 10px 12px;
+  background: #FEF0F0;
   border-radius: 8px;
-  background: rgba(30, 41, 59, 0.8);
-  color: #94a3b8;
-  font-size: 0.76rem;
-  font-weight: 800;
 }
 
-.stage-strip span.current {
-  background: rgba(20, 184, 166, 0.26);
-  color: #ccfbf1;
+/* ── Results grid ── */
+.results-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(440px, 1fr));
+  gap: 16px;
 }
 
-.stage-strip span.done {
-  background: rgba(132, 204, 22, 0.22);
-  color: #ecfccb;
+.result-card {
+  background: #FFFFFF;
+  border: 1px solid #E8E6E1;
+  border-radius: 12px;
+  padding: 20px 24px;
 }
 
-.status-message,
-.error {
-  margin: 14px 0 0;
-  color: #cbd5e1;
+.card-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 16px;
 }
 
-.error {
-  color: #fecdd3;
+.card-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: #1A1A1A;
+  letter-spacing: -0.2px;
 }
 
-.section-heading span {
-  color: #94a3b8;
-  font-weight: 800;
-}
-
-.scene-rail {
+/* Timeline */
+.timeline-bar {
   position: relative;
-  height: 54px;
-  margin: 20px 0;
+  height: 40px;
+  background: #F5F4F0;
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.95);
   overflow: hidden;
+  margin-bottom: 14px;
 }
 
-.scene-block {
+.timeline-seg {
   position: absolute;
-  top: 9px;
-  bottom: 9px;
-  border-radius: 6px;
-  background: linear-gradient(135deg, #2dd4bf, #a3e635);
-  box-shadow: 0 0 18px rgba(45, 212, 191, 0.25);
-  animation: riseIn 420ms both ease;
+  top: 6px;
+  bottom: 6px;
+  background: #1A1A1A;
+  border-radius: 3px;
+  opacity: 0;
+  animation: fadeIn 300ms both ease;
 }
 
 .scene-list {
-  max-height: 260px;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 8px;
-  overflow: auto;
+  max-height: 220px;
+  overflow-y: auto;
   list-style: none;
-}
-
-.scene-note {
-  margin: 12px 0 0;
-  color: #94a3b8;
-  font-size: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .scene-list li {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
-  min-height: 42px;
-  padding: 0 12px;
-  border-radius: 8px;
-  background: rgba(30, 41, 59, 0.66);
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13px;
 }
 
-.scene-list span {
-  color: #94a3b8;
+.scene-list li:hover { background: #F5F4F0; }
+
+.scene-num {
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  color: #C4C0B8;
+  min-width: 24px;
 }
 
-.scene-list strong {
-  font-variant-numeric: tabular-nums;
+.scene-range {
+  flex: 1;
+  font-family: 'DM Mono', monospace;
+  font-size: 12px;
+  color: #4A4740;
 }
 
-.player-panel {
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(15, 23, 42, 0.74);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.24);
-  backdrop-filter: blur(18px);
+.scene-dur {
+  font-size: 12px;
+  color: #9B978E;
+  font-family: 'DM Mono', monospace;
 }
 
-.video-player {
-  display: block;
-  width: 100%;
-  max-height: min(62vh, 680px);
-  margin-top: 16px;
-  border-radius: 8px;
-  background: #020617;
+.overflow-note {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #9B978E;
+  font-style: italic;
 }
 
-.scene-list a {
-  color: #5eead4;
-  font-weight: 800;
-  text-decoration: none;
-}
-
-.scene-list a:hover {
-  color: #99f6e4;
-}
-
-.scene-list button {
-  min-height: 34px;
-  padding: 0 12px;
-  background: rgba(20, 184, 166, 0.18);
-  color: #ccfbf1;
-}
-
-.result-box a,
-.result-box button {
-  display: inline-grid;
-  place-items: center;
-}
-
-.result-actions {
+/* Output card */
+.output-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
 }
 
-.result-actions .quiet-link {
-  background: rgba(148, 163, 184, 0.18);
-  color: #e5e7eb;
+.out-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid #E0DDD6;
+  background: #1A1A1A;
+  color: #FFFFFF;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 150ms;
 }
 
+.out-btn:hover { background: #333; }
+.out-btn.secondary { background: transparent; color: #1A1A1A; }
+.out-btn.secondary:hover { background: #F5F4F0; }
+.out-btn.small { padding: 5px 10px; font-size: 12px; }
+
+/* Player */
+.player-card { grid-column: 1 / -1; }
+
+.video-el {
+  width: 100%;
+  max-height: 420px;
+  border-radius: 8px;
+  background: #0A0A0A;
+  display: block;
+}
+
+/* Key moments */
+.moments-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.moments-list li {
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid #F0EEE8;
+  transition: border-color 150ms;
+}
+
+.moments-list li:hover { border-color: #D4D1C8; }
+
+.moment-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.moment-time {
+  font-family: 'DM Mono', monospace;
+  font-size: 12px;
+  color: #4A4740;
+}
+
+.moment-score {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1A1A1A;
+  background: #E8FF47;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.moment-reason {
+  font-size: 12.5px;
+  color: #6B6860;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+/* Animations */
 @keyframes pulse {
-  70% {
-    box-shadow: 0 0 0 12px rgba(34, 197, 94, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
-  }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
-@keyframes sweep {
-  to {
-    transform: translateX(100%);
-  }
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 0.85; transform: none; }
 }
 
-@keyframes riseIn {
-  from {
-    opacity: 0;
-    transform: translateY(14px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
+/* Scrollbar */
+.scene-list::-webkit-scrollbar,
+.moments-list::-webkit-scrollbar { width: 4px; }
+.scene-list::-webkit-scrollbar-track,
+.moments-list::-webkit-scrollbar-track { background: transparent; }
+.scene-list::-webkit-scrollbar-thumb,
+.moments-list::-webkit-scrollbar-thumb { background: #D4D1C8; border-radius: 2px; }
 
-@media (max-width: 720px) {
-  .shell {
-    padding: 14px;
-  }
-
-  .masthead,
-  .controls,
-  .progress-copy,
-  .section-heading,
-  .player-panel,
-  .result-box {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .controls {
-    display: grid;
-  }
-
-  .stage-strip {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .scene-list li {
-    align-items: flex-start;
-    flex-direction: column;
-    padding: 10px 12px;
-  }
+/* Responsive */
+@media (max-width: 900px) {
+  .sidebar { width: 56px; }
+  .logo-text, .nav-label, .sidebar-bottom { display: none; }
+  .sidebar-logo { padding: 0 14px 16px; justify-content: center; }
+  .nav-item { justify-content: center; padding: 10px; }
+  .topbar { flex-direction: column; align-items: stretch; gap: 10px; }
+  .topbar-actions { flex-wrap: wrap; }
+  .results-grid { grid-template-columns: 1fr; }
+  .player-card { grid-column: 1; }
 }
 </style>
