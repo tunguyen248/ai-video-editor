@@ -6,7 +6,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from config import CHUNK_OVERLAP_SECONDS, CHUNK_SECONDS, HIGHLIGHT_SECONDS, OUTPUT_DIR, TEMP_DIR
+from config import (
+    CHUNK_OVERLAP_SECONDS,
+    CHUNK_SECONDS,
+    CLIP_AUDIO_FADE_SECONDS,
+    CLIP_TIMESTAMP_PADDING_SECONDS,
+    HIGHLIGHT_SECONDS,
+    MAX_CLIP_TIMESTAMP_PADDING_SECONDS,
+    MIN_CLIP_TIMESTAMP_PADDING_SECONDS,
+    OUTPUT_DIR,
+    TEMP_DIR,
+)
 
 ProgressCallback = Callable[[float, str], None]
 
@@ -19,6 +29,36 @@ class FFmpegCommandError(RuntimeError):
         self.stdout = stdout.strip()
         detail = self.stderr or self.stdout or "Unknown command execution error"
         super().__init__(f"{message}: {detail}")
+
+
+def clamp_timestamp_padding(padding_seconds: float) -> float:
+    return min(
+        MAX_CLIP_TIMESTAMP_PADDING_SECONDS,
+        max(MIN_CLIP_TIMESTAMP_PADDING_SECONDS, padding_seconds),
+    )
+
+
+def calculate_padded_interval(
+    start: float,
+    end: float,
+    source_duration: float,
+    padding_seconds: float = CLIP_TIMESTAMP_PADDING_SECONDS,
+) -> tuple[float, float]:
+    if source_duration <= 0:
+        raise RuntimeError("Cannot pad a clip without a positive source duration.")
+
+    raw_start = max(0.0, float(start))
+    raw_end = min(float(end), source_duration)
+    if raw_end <= raw_start:
+        raise RuntimeError("Clip end time must be greater than start time before padding.")
+
+    padding = clamp_timestamp_padding(padding_seconds)
+    padded_start = max(0.0, raw_start - padding)
+    padded_end = min(source_duration, raw_end + padding)
+    if padded_end - padded_start < MIN_CLIP_TIMESTAMP_PADDING_SECONDS:
+        raise RuntimeError("Padded clip interval is too short to render cleanly.")
+
+    return round(padded_start, 3), round(padded_end, 3)
 
 
 @dataclass(frozen=True)
@@ -93,6 +133,22 @@ class FFmpegEngine:
             raise RuntimeError("Could not determine a positive video duration.")
         return duration
 
+    def has_audio_stream(self, video_path: Path) -> bool:
+        command = [
+            self.ffprobe_binary,
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=index",
+            "-of",
+            "csv=p=0",
+            str(video_path),
+        ]
+        completed = self.run(command, "Failed checking video audio stream")
+        return bool(completed.stdout.strip())
+
     def extract_audio(self, video_path: Path, audio_path: Path) -> Path:
         audio_path.parent.mkdir(parents=True, exist_ok=True)
         command = [
@@ -131,6 +187,29 @@ class FFmpegEngine:
         self.run(command, "Failed extracting WAV audio")
         return audio_path
 
+    def apply_visual_filters(self, video_path: Path, output_path: Path, video_filter: str | None = None) -> Path:
+        if not video_filter:
+            return video_path
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        command = [
+            self.ffmpeg_binary,
+            "-y",
+            "-i",
+            str(video_path),
+            "-vf",
+            video_filter,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-c:a",
+            "copy",
+            str(output_path),
+        ]
+        self.run(command, "Failed applying visual filters")
+        return output_path
+
     def burn_subtitles(self, video_path: Path, srt_path: Path, output_path: Path) -> Path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         subtitle_filter = self._build_subtitle_filter(srt_path)
@@ -148,30 +227,68 @@ class FFmpegEngine:
         self.run(command, "Failed burning captions into video")
         return output_path
 
-    def create_highlight_segment(self, video_path: Path, start: float, end: float, output_path: Path) -> Path:
-        if end <= start:
+    def create_highlight_segment(
+        self,
+        video_path: Path,
+        start: float,
+        end: float,
+        output_path: Path,
+        *,
+        source_duration: float | None = None,
+        padding_seconds: float = CLIP_TIMESTAMP_PADDING_SECONDS,
+        audio_fade_seconds: float = CLIP_AUDIO_FADE_SECONDS,
+    ) -> Path:
+        source_duration = source_duration if source_duration is not None else self.get_video_duration(video_path)
+        padded_start, padded_end = calculate_padded_interval(start, end, source_duration, padding_seconds)
+        clip_duration = round(padded_end - padded_start, 6)
+        if clip_duration <= 0:
             raise RuntimeError("Highlight segment end time must be greater than start time.")
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        command = [
+        command: list[str] = [
             self.ffmpeg_binary,
             "-y",
             "-ss",
-            f"{start}",
-            "-to",
-            f"{end}",
+            f"{padded_start:.3f}",
+            "-t",
+            f"{clip_duration:.3f}",
             "-i",
             str(video_path),
             "-c:v",
             "libx264",
             "-preset",
             "veryfast",
-            "-c:a",
-            "aac",
-            str(output_path),
         ]
-        self.run(command, "Failed creating scene highlight segment")
+
+        if self.has_audio_stream(video_path):
+            fade_seconds = min(max(0.0, audio_fade_seconds), clip_duration / 2)
+            fade_out_start = max(0.0, clip_duration - fade_seconds)
+            audio_filter = f"afade=t=in:st=0:d={fade_seconds:.3f},afade=t=out:st={fade_out_start:.3f}:d={fade_seconds:.3f}"
+            command.extend(["-af", audio_filter, "-c:a", "aac"])
+        else:
+            command.append("-an")
+
+        command.append(str(output_path))
+        self.run(command, "Failed creating padded highlight segment")
         return output_path
+
+    def finalize_with_subtitles(
+        self,
+        video_path: Path,
+        srt_path: Path,
+        output_path: Path,
+        *,
+        video_filter: str | None = None,
+    ) -> Path:
+        if not video_filter:
+            return self.burn_subtitles(video_path, srt_path, output_path)
+
+        filtered_path = output_path.with_name(f"{output_path.stem}_filtered{output_path.suffix}")
+        try:
+            self.apply_visual_filters(video_path, filtered_path, video_filter)
+            return self.burn_subtitles(filtered_path, srt_path, output_path)
+        finally:
+            filtered_path.unlink(missing_ok=True)
 
     def concat(self, input_paths: Sequence[Path], output_path: Path, error_prefix: str) -> Path:
         if not input_paths:
@@ -389,14 +506,29 @@ def burn_subtitles_into_video(video_path: Path, srt_path: Path, output_path: Pat
     return ffmpeg_engine.burn_subtitles(video_path, srt_path, output_path)
 
 
+def finalize_video_with_subtitles(
+    video_path: Path,
+    srt_path: Path,
+    output_path: Path,
+    *,
+    video_filter: str | None = None,
+) -> Path:
+    return ffmpeg_engine.finalize_with_subtitles(video_path, srt_path, output_path, video_filter=video_filter)
+
+
 def build_highlight_reel(
     video_path: Path,
     scenes: list[dict[str, float]],
     video_id: str,
     progress_callback: ProgressCallback | None = None,
+    *,
+    subtitle_path: Path | None = None,
+    video_filter: str | None = None,
 ) -> Path:
     segment_paths: list[Path] = []
     total_scenes = len(scenes)
+    source_duration = ffmpeg_engine.get_video_duration(video_path)
+    stitched_path: Path | None = None
 
     for idx, scene in enumerate(scenes):
         start = float(scene["start"])
@@ -410,7 +542,15 @@ def build_highlight_reel(
         if progress_callback:
             progress_callback(5 + (idx / max(total_scenes, 1)) * 75, f"Rendering highlight {idx + 1} of {total_scenes}")
 
-        segment_paths.append(ffmpeg_engine.create_highlight_segment(video_path, start, clip_end, segment_path))
+        segment_paths.append(
+            ffmpeg_engine.create_highlight_segment(
+                video_path,
+                start,
+                clip_end,
+                segment_path,
+                source_duration=source_duration,
+            )
+        )
 
     if not segment_paths:
         raise RuntimeError("No valid scene segments available to build a hype reel.")
@@ -419,10 +559,31 @@ def build_highlight_reel(
     try:
         if progress_callback:
             progress_callback(86, "Stitching highlight reel")
-        return ffmpeg_engine.concat(segment_paths, output_path, "Failed concatenating highlight segments")
+        needs_final_pass = subtitle_path is not None or video_filter is not None
+        stitched_path = OUTPUT_DIR / f"{video_id}_hype_reel_stitched.mp4" if needs_final_pass else output_path
+        ffmpeg_engine.concat(segment_paths, stitched_path, "Failed concatenating highlight segments")
+
+        if video_filter and subtitle_path:
+            if progress_callback:
+                progress_callback(92, "Applying visual filters before subtitles")
+            return ffmpeg_engine.finalize_with_subtitles(stitched_path, subtitle_path, output_path, video_filter=video_filter)
+
+        if video_filter:
+            if progress_callback:
+                progress_callback(92, "Applying visual filters")
+            return ffmpeg_engine.apply_visual_filters(stitched_path, output_path, video_filter)
+
+        if subtitle_path:
+            if progress_callback:
+                progress_callback(96, "Burning subtitles into final video")
+            return ffmpeg_engine.burn_subtitles(stitched_path, subtitle_path, output_path)
+
+        return output_path
     finally:
         for segment in segment_paths:
             segment.unlink(missing_ok=True)
+        if stitched_path is not None and stitched_path != output_path:
+            stitched_path.unlink(missing_ok=True)
 
 
 def build_timestamp_clips(
@@ -435,6 +596,7 @@ def build_timestamp_clips(
 ) -> list[Path]:
     clip_paths: list[Path] = []
     total_intervals = len(intervals)
+    source_duration = ffmpeg_engine.get_video_duration(video_path)
 
     for idx, interval in enumerate(intervals):
         start = float(interval["start"])
@@ -448,7 +610,15 @@ def build_timestamp_clips(
         if progress_callback:
             progress_callback(5 + (idx / max(total_intervals, 1)) * 90, f"Rendering clip {idx + 1} of {total_intervals}")
 
-        clip_paths.append(ffmpeg_engine.create_highlight_segment(video_path, start, clip_end, clip_path))
+        clip_paths.append(
+            ffmpeg_engine.create_highlight_segment(
+                video_path,
+                start,
+                clip_end,
+                clip_path,
+                source_duration=source_duration,
+            )
+        )
 
     if not clip_paths:
         raise RuntimeError("No valid timestamp clips were available to render.")
