@@ -139,6 +139,24 @@
         <a :href="downloadUrl" target="_blank" rel="noopener">Open result</a>
       </section>
 
+      <section v-if="clipUrls.length > 0" class="result-box">
+        <div>
+          <p class="eyebrow">Clips</p>
+          <h2>{{ clipUrls.length }} clip{{ clipUrls.length === 1 ? '' : 's' }} ready</h2>
+        </div>
+        <div class="result-actions">
+          <a
+            v-for="(clipUrl, index) in clipUrls"
+            :key="clipUrl"
+            :href="clipUrl"
+            target="_blank"
+            rel="noopener"
+          >
+            Open {{ index + 1 }}
+          </a>
+        </div>
+      </section>
+
       <section v-if="captionedUrl" class="result-box">
         <div>
           <p class="eyebrow">Captions</p>
@@ -161,6 +179,7 @@
         <ol class="scene-list">
           <li v-for="(moment, index) in keyMoments" :key="`moment-${moment.start}-${index}`">
             <span>{{ formatSeconds(moment.start) }}s -> {{ formatSeconds(moment.end) }}s</span>
+            <a v-if="moment.clipUrl" :href="moment.clipUrl" target="_blank" rel="noopener">Open clip</a>
             <strong>{{ moment.score }} pts · {{ moment.reason }}</strong>
           </li>
         </ol>
@@ -180,6 +199,7 @@ const scenes = ref([])
 const status = ref('idle') // idle | processing | complete | error
 const statusMessage = ref('')
 const downloadUrl = ref('')
+const clipUrls = ref([])
 const captionedUrl = ref('')
 const srtUrl = ref('')
 const captionSegments = ref([])
@@ -347,6 +367,7 @@ const setSelectedFile = (file) => {
   videoId.value = ''
   scenes.value = []
   downloadUrl.value = ''
+  clipUrls.value = []
   captionedUrl.value = ''
   srtUrl.value = ''
   captionSegments.value = []
@@ -366,6 +387,7 @@ const detectScenes = async () => {
   progress.value = 2
   statusMessage.value = 'Uploading video'
   downloadUrl.value = ''
+  clipUrls.value = []
   scenes.value = []
 
   const formData = new FormData()
@@ -401,6 +423,7 @@ const detectKeyMoments = async () => {
   progress.value = 4
   statusMessage.value = `Uploading video for key moment detection on ${whisperDevice.value.toUpperCase()}${smartChunking.value ? ' with smart chunking' : ''}`
   keyMoments.value = []
+  clipUrls.value = []
 
   const formData = new FormData()
   formData.append('video', selectedFile.value)
@@ -414,11 +437,19 @@ const detectKeyMoments = async () => {
     })
 
     await waitForJob(payload.job_id, (result) => {
-      keyMoments.value = Array.isArray(result.moments) ? result.moments : []
+      keyMoments.value = Array.isArray(result.moments)
+        ? result.moments.map((moment) => ({
+            ...moment,
+            clipUrl: moment.clip_path ? `${API_BASE}${moment.clip_path}` : '',
+          }))
+        : []
+      clipUrls.value = Array.isArray(result.clip_paths)
+        ? result.clip_paths.map((path) => `${API_BASE}${path}`)
+        : keyMoments.value.map((moment) => moment.clipUrl).filter(Boolean)
       status.value = 'complete'
       activeJobType.value = ''
       progress.value = 100
-      statusMessage.value = `Detected ${keyMoments.value.length} key moment(s).`
+      statusMessage.value = `Detected ${keyMoments.value.length} key moment(s) and generated ${clipUrls.value.length} clip(s).`
     })
   } catch (error) {
     setError(error.message || 'Unexpected error while detecting key moments.')
@@ -436,6 +467,7 @@ const generateHypeReel = async () => {
   progress.value = 3
   statusMessage.value = 'Starting render'
   downloadUrl.value = ''
+  clipUrls.value = []
 
   try {
     const payload = await startRequest('/smart_cut', {
@@ -450,11 +482,14 @@ const generateHypeReel = async () => {
     })
 
     await waitForJob(payload.job_id, (result) => {
-      downloadUrl.value = `${API_BASE}${result.hype_reel_path}`
+      clipUrls.value = Array.isArray(result.clip_paths)
+        ? result.clip_paths.map((path) => `${API_BASE}${path}`)
+        : []
+      downloadUrl.value = result.hype_reel_path ? `${API_BASE}${result.hype_reel_path}` : ''
       status.value = 'complete'
       activeJobType.value = ''
       progress.value = 100
-      statusMessage.value = 'Hype reel generated successfully.'
+      statusMessage.value = `Generated ${clipUrls.value.length || 1} hype clip(s).`
     })
   } catch (error) {
     setError(error.message || 'Unexpected error while generating hype reel.')
@@ -1041,6 +1076,16 @@ button:disabled {
 
 .scene-list strong {
   font-variant-numeric: tabular-nums;
+}
+
+.scene-list a {
+  color: #5eead4;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.scene-list a:hover {
+  color: #99f6e4;
 }
 
 .result-box a {

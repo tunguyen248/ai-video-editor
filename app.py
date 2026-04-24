@@ -5,18 +5,15 @@ import uuid
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
-from config import MAX_CONTENT_LENGTH, OUTPUT_DIR, PORT
+from config import MAX_CONTENT_LENGTH, OUTPUT_DIR, PORT, TRANSCRIPT_DIR
+from core.job_manager import create_processing_job, get_analysis_video, get_processing_job, start_background_job
 from core.processor import (
-    create_processing_job,
-    get_analysis_video,
-    get_processing_job,
     run_caption_job,
     run_chunked_caption_job,
     run_chunked_key_moment_job,
     run_key_moment_job,
     run_scene_analysis_job,
     run_smart_cut_job,
-    start_background_job,
 )
 from core.utils import cleanup_startup_folders, is_allowed_file, parse_bool_flag, save_uploaded_video
 from services.transcription import get_whisper_capabilities, normalize_whisper_device
@@ -144,6 +141,11 @@ def whisper_capabilities():
 @app.get("/output/<path:filename>")
 def download_output(filename: str):
     return send_from_directory(OUTPUT_DIR, filename, as_attachment=False)
+
+
+@app.get("/storage/transcripts/<path:filename>")
+def download_transcript(filename: str):
+    return send_from_directory(TRANSCRIPT_DIR, filename, as_attachment=False)
 
 
 if __name__ == "__main__":

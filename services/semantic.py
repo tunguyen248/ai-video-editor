@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 from typing import Any
 from urllib import error, request as urllib_request
 
 from config import LLM_MAX_WINDOWS, LLM_SEMANTIC_MODEL, LLM_TIMEOUT_SECONDS, SEMANTIC_WINDOW_SECONDS
+from core.logger import get_logger
 from services.audio import overlaps
+
+logger = get_logger("SemanticService")
 
 
 def build_transcript_windows(
@@ -111,7 +113,7 @@ def score_transcript_windows_with_llm(
 ) -> dict[float, dict[str, Any]]:
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not api_key:
-        logging.warning(
+        logger.warning(
             "score_transcript_windows_with_llm: OPENAI_API_KEY is not set; "
             "semantic scoring will use keyword fallback windows only."
         )
@@ -182,14 +184,14 @@ def score_transcript_windows_with_llm(
         except (error.URLError, TimeoutError, json.JSONDecodeError, KeyError, IndexError) as exc:
             last_exc = exc
             if attempt < max_retries:
-                logging.warning(
+                logger.warning(
                     "score_transcript_windows_with_llm: attempt %d/%d failed (%s), retrying...",
                     attempt + 1,
                     max_retries + 1,
                     exc,
                 )
     else:
-        logging.error(
+        logger.error(
             "score_transcript_windows_with_llm: all %d attempts failed; last error: %s. "
             "Semantic scoring will use keyword fallback windows for this batch.",
             max_retries + 1,

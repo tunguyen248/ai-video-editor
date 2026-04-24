@@ -1,18 +1,21 @@
 from __future__ import annotations
 
-import logging
 import os
 from pathlib import Path
+
+from core.logger import configure_logging
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMP_DIR = BASE_DIR / "temp"
 OUTPUT_DIR = BASE_DIR / "output"
+TRANSCRIPT_DIR = BASE_DIR / "storage" / "transcripts"
+WHISPER_MODEL_NAME = os.getenv("WHISPER_MODEL_NAME", "base")
 
 ALLOWED_EXTENSIONS = {"mp4", "mov", "mkv", "avi", "webm", "m4v"}
 MAX_CONTENT_LENGTH = 2 * 1024 * 1024 * 1024  # 2GB
 SCENE_DIFF_THRESHOLD = 0.62
 ANALYSIS_SAMPLE_SECONDS = 0.45
-ANALYSIS_RESOLUTION = (320, 180)
+ANALYSIS_RESOLUTION = (256, 144)
 HIGHLIGHT_SECONDS = 2.0
 MIN_SCENE_SECONDS = 1.75
 MAX_DETECTED_SCENES = 180
@@ -29,4 +32,4 @@ LLM_TIMEOUT_SECONDS = int(os.getenv("HIGHLIGHT_LLM_TIMEOUT_SECONDS", "30"))
 LLM_MAX_WINDOWS = 24
 PORT = int(os.environ.get("PORT", "5000"))
 
-logging.basicConfig(level=logging.INFO)
+configure_logging()

@@ -7,7 +7,7 @@ The backend is now split into focused modules so `app.py` stays as the HTTP entr
 - `config.py`: Centralized constants, directory paths, and environment-backed settings.
 - `core/processor.py`: Background threading, job state management, and cross-service orchestration for scenes, captions, and key moments.
 - `core/utils.py`: General helpers for cleanup, file validation, upload persistence, boolean parsing, formatting, and safe user-facing error messages.
-- `services/vision.py`: OpenCV-based scene detection and frame signature analysis.
+- `services/vision_service.py`: OpenCV-based scene detection and frame signature analysis.
 - `services/audio.py`: Librosa-based audio peaks, pitch variance, speech-rate analysis, and final key-moment scoring.
 - `services/transcription.py`: Whisper device selection, CUDA capability checks, model loading, and chunk-aware transcription helpers.
 - `services/semantic.py`: Transcript window building plus OpenAI-powered or keyword-fallback semantic scoring.
