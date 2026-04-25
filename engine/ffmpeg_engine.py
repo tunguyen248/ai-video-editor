@@ -272,6 +272,41 @@ class FFmpegEngine:
         self.run(command, "Failed creating padded highlight segment")
         return output_path
 
+    def create_lossless_segment(
+        self,
+        video_path: Path,
+        start: float,
+        end: float,
+        output_path: Path,
+        *,
+        source_duration: float | None = None,
+    ) -> Path:
+        source_duration = source_duration if source_duration is not None else self.get_video_duration(video_path)
+        safe_start = max(0.0, min(float(start), source_duration))
+        safe_end = max(0.0, min(float(end), source_duration))
+        clip_duration = round(safe_end - safe_start, 6)
+        if clip_duration <= 0:
+            raise RuntimeError("Lossless segment end time must be greater than start time.")
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        command = [
+            self.ffmpeg_binary,
+            "-y",
+            "-ss",
+            f"{safe_start:.3f}",
+            "-t",
+            f"{clip_duration:.3f}",
+            "-i",
+            str(video_path),
+            "-c",
+            "copy",
+            "-avoid_negative_ts",
+            "make_zero",
+            str(output_path),
+        ]
+        self.run(command, "Failed creating lossless EDL segment")
+        return output_path
+
     def finalize_with_subtitles(
         self,
         video_path: Path,
@@ -624,3 +659,47 @@ def build_timestamp_clips(
         raise RuntimeError("No valid timestamp clips were available to render.")
 
     return clip_paths
+
+
+def build_project_export(
+    video_path: Path,
+    intervals: list[dict[str, float]],
+    video_id: str,
+    progress_callback: ProgressCallback | None = None,
+) -> Path:
+    segment_paths: list[Path] = []
+    total_intervals = len(intervals)
+    source_duration = ffmpeg_engine.get_video_duration(video_path)
+
+    for idx, interval in enumerate(intervals):
+        start = float(interval["start"])
+        end = float(interval["end"])
+        if end <= start:
+            continue
+
+        segment_path = OUTPUT_DIR / f"{video_id}_export_segment_{idx + 1:03d}.mp4"
+        if progress_callback:
+            progress_callback(8 + (idx / max(total_intervals, 1)) * 78, f"Copying edit {idx + 1} of {total_intervals}")
+
+        segment_paths.append(
+            ffmpeg_engine.create_lossless_segment(
+                video_path,
+                start,
+                end,
+                segment_path,
+                source_duration=source_duration,
+            )
+        )
+
+    if not segment_paths:
+        raise RuntimeError("No valid EDL clips were available to export.")
+
+    output_path = OUTPUT_DIR / f"{video_id}_project_export.mp4"
+    try:
+        if progress_callback:
+            progress_callback(90, "Stitching exported project")
+        ffmpeg_engine.concat(segment_paths, output_path, "Failed stitching exported EDL")
+        return output_path
+    finally:
+        for segment in segment_paths:
+            segment.unlink(missing_ok=True)

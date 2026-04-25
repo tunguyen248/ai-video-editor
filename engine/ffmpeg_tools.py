@@ -5,6 +5,7 @@ from engine.ffmpeg_engine import (
     SmartChunk,
     SmartChunker,
     build_highlight_reel,
+    build_project_export,
     build_timestamp_clips,
     burn_subtitles_into_video,
     calculate_padded_interval,

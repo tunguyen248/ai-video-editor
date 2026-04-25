@@ -5,23 +5,36 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
 
-from config import CHUNK_OVERLAP_SECONDS, CHUNK_SECONDS, CHUNK_WORKERS, MAX_HIGHLIGHT_SCENES, OUTPUT_DIR, TEMP_DIR
+from config import (
+    CHUNK_OVERLAP_SECONDS,
+    CHUNK_SECONDS,
+    CHUNK_WORKERS,
+    CLIP_AUDIO_FADE_SECONDS,
+    CLIP_TIMESTAMP_PADDING_SECONDS,
+    MAX_HIGHLIGHT_SCENES,
+    OUTPUT_DIR,
+    TEMP_DIR,
+)
 from core.job_manager import (
     ANALYSIS_JOBS,
     JOBS_LOCK,
     PROCESSING_JOBS,
     create_processing_job,
     fail_processing_job,
+    get_analysis_metadata,
     get_analysis_video,
     get_processing_job,
+    register_analysis_metadata,
     register_analysis_video,
     start_background_job,
     update_processing_job,
 )
 from core.utils import normalize_scenes
 from engine.ffmpeg_engine import (
+    build_project_export,
     build_timestamp_clips,
     burn_subtitles_into_video,
+    calculate_padded_interval,
     extract_audio_from_video,
     extract_wav_audio_from_video,
     get_video_duration_ffprobe,
@@ -208,6 +221,82 @@ def attach_clip_paths(moments: list[dict[str, Any]], clip_paths: list[Path]) -> 
     return enriched_moments
 
 
+def strip_rendered_clip_fields(moments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            key: value
+            for key, value in moment.items()
+            if key not in {"clip_path", "clipUrl"}
+        }
+        for moment in moments
+    ]
+
+
+def normalize_edl_clips(
+    clips: list[dict[str, Any]],
+    *,
+    source_duration: float,
+    transcript_segments: list[dict[str, Any]] | None = None,
+) -> list[dict[str, float]]:
+    normalized: list[dict[str, float]] = []
+    transcript_segments = transcript_segments or []
+
+    for clip in clips:
+        try:
+            start = float(clip["start"])
+            end = float(clip["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        if end <= start:
+            continue
+
+        padded_start, padded_end = calculate_padded_interval(
+            start,
+            end,
+            source_duration,
+            padding_seconds=CLIP_TIMESTAMP_PADDING_SECONDS,
+        )
+        boundary_start, boundary_end = apply_transcript_boundary_padding(
+            padded_start,
+            padded_end,
+            source_duration=source_duration,
+            transcript_segments=transcript_segments,
+        )
+        normalized.append({"start": boundary_start, "end": boundary_end})
+
+    return normalized
+
+
+def apply_transcript_boundary_padding(
+    start: float,
+    end: float,
+    *,
+    source_duration: float,
+    transcript_segments: list[dict[str, Any]],
+) -> tuple[float, float]:
+    if not transcript_segments:
+        return round(start, 3), round(end, 3)
+
+    boundary_start = start
+    boundary_end = end
+    max_adjust = max(CLIP_TIMESTAMP_PADDING_SECONDS, CLIP_AUDIO_FADE_SECONDS)
+
+    for segment in transcript_segments:
+        try:
+            segment_start = float(segment.get("start", 0.0))
+            segment_end = float(segment.get("end", segment_start))
+        except (TypeError, ValueError):
+            continue
+
+        if segment_start <= start <= segment_end and start - segment_start <= max_adjust:
+            boundary_start = min(boundary_start, segment_start)
+        if segment_start <= end <= segment_end and segment_end - end <= max_adjust:
+            boundary_end = max(boundary_end, segment_end)
+
+    return round(max(0.0, boundary_start), 3), round(min(source_duration, boundary_end), 3)
+
+
 def run_scene_analysis_job(job_id: str, video_id: str, input_path: Path) -> None:
     try:
         update_processing_job(job_id, state="processing", progress=4, message="Preparing upload")
@@ -362,28 +451,26 @@ def run_key_moment_job(job_id: str, video_path: Path, video_id: str, whisper_dev
         semantic_diagnostics = {
             key: value for key, value in moment_diagnostics.items() if key not in {"semantic_scores", "transcript_windows"}
         }
-        update_processing_job(job_id, state="processing", progress=94, message="Cutting key moments into clips")
-        clip_paths = (
-            build_timestamp_clips(
-                video_path,
-                moments,
-                video_id,
-                "key_moment",
-                lambda progress, message: update_processing_job(job_id, state="processing", progress=92 + progress * 0.06, message=message),
-                max_clip_seconds=None,
-            )
-            if moments
-            else []
+        update_processing_job(job_id, state="processing", progress=94, message="Preparing editable moment metadata")
+        register_analysis_video(video_id, video_path)
+        register_analysis_metadata(
+            video_id,
+            {
+                "moments": strip_rendered_clip_fields(moments),
+                "transcript_segments": transcript_segments,
+                "duration": duration,
+                "source_video_path": f"/source/{video_id}",
+            },
         )
-        moments_with_clips = attach_clip_paths(moments, clip_paths)
         update_processing_job(
             job_id,
             state="complete",
             progress=100,
             message=f"Detected {len(moments)} key moment(s)" + (" using keyword fallback scoring" if semantic_diagnostics.get("mode") != "llm" else ""),
             result={
-                "moments": moments_with_clips,
-                **build_clip_result(clip_paths),
+                "video_id": video_id,
+                "source_video_path": f"/source/{video_id}",
+                "moments": strip_rendered_clip_fields(moments),
                 **transcript_paths,
                 "audio_peaks": audio_peaks,
                 "pitch_spikes": pitch_spikes,
@@ -553,26 +640,30 @@ def run_chunked_key_moment_job(job_id: str, video_path: Path, video_id: str, whi
             job_type="key_moments",
             chunked=True,
         )
-        update_processing_job(job_id, state="processing", progress=92, message="Cutting key moments into clips")
-        clip_paths = (
-            build_timestamp_clips(
-                video_path,
-                merged["moments"],
-                video_id,
-                "key_moment",
-                lambda progress, message: update_processing_job(job_id, state="processing", progress=92 + progress * 0.06, message=message),
-                max_clip_seconds=None,
-            )
-            if merged["moments"]
-            else []
+        update_processing_job(job_id, state="processing", progress=92, message="Preparing editable moment metadata")
+        register_analysis_video(video_id, video_path)
+        register_analysis_metadata(
+            video_id,
+            {
+                "moments": strip_rendered_clip_fields(merged["moments"]),
+                "transcript_segments": merged["transcript_segments"],
+                "duration": duration,
+                "source_video_path": f"/source/{video_id}",
+            },
         )
-        moments_with_clips = attach_clip_paths(merged["moments"], clip_paths)
         update_processing_job(
             job_id,
             state="complete",
             progress=100,
             message=f"Detected {len(merged['moments'])} merged key moment(s)" + (" using keyword fallback scoring" if merged.get("semantic_diagnostics", {}).get("mode") != "llm" else ""),
-            result={**merged, "moments": moments_with_clips, **build_clip_result(clip_paths), **transcript_paths, "chunked": True},
+            result={
+                **merged,
+                "video_id": video_id,
+                "source_video_path": f"/source/{video_id}",
+                "moments": strip_rendered_clip_fields(merged["moments"]),
+                **transcript_paths,
+                "chunked": True,
+            },
         )
     except Exception as exc:
         fallback = f"Whisper failed while processing key-moment chunks on {device_label}. Try CPU mode if GPU/CUDA is not configured correctly."
@@ -587,3 +678,52 @@ def run_chunked_key_moment_job(job_id: str, video_path: Path, video_id: str, whi
         chunk_root = TEMP_DIR / f"{video_id}_chunks"
         if chunk_root.exists():
             shutil.rmtree(chunk_root, ignore_errors=True)
+
+
+def run_export_project_job(job_id: str, video_id: str, clips: list[dict[str, Any]]) -> None:
+    try:
+        input_path = get_analysis_video(video_id)
+        if not input_path or not input_path.exists():
+            raise RuntimeError("Unknown or expired video_id. Detect key moments again.")
+
+        update_processing_job(job_id, state="processing", progress=4, message="Validating edit decision list")
+        metadata = get_analysis_metadata(video_id) or {}
+        duration = float(metadata.get("duration") or get_video_duration_ffprobe(input_path))
+        transcript_segments = metadata.get("transcript_segments", [])
+        if not isinstance(transcript_segments, list):
+            transcript_segments = []
+
+        normalized_clips = normalize_edl_clips(
+            clips,
+            source_duration=duration,
+            transcript_segments=transcript_segments,
+        )
+        if not normalized_clips:
+            raise RuntimeError("The edit decision list did not contain any valid clips.")
+
+        output_path = build_project_export(
+            input_path,
+            normalized_clips,
+            video_id,
+            lambda progress, message: update_processing_job(job_id, state="processing", progress=progress, message=message),
+        )
+        update_processing_job(
+            job_id,
+            state="complete",
+            progress=100,
+            message=f"Exported {len(normalized_clips)} edited clip(s)",
+            result={
+                "export_path": f"/output/{output_path.name}",
+                "clips": normalized_clips,
+                "audio_crossfade_seconds": CLIP_AUDIO_FADE_SECONDS,
+                "timestamp_padding_seconds": CLIP_TIMESTAMP_PADDING_SECONDS,
+            },
+        )
+    except Exception as exc:
+        fail_processing_job(
+            job_id,
+            exc,
+            service_name="FFmpegService",
+            message="Project export failed",
+            fallback_message="Project export failed. Check the server logs for details.",
+        )

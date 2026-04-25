@@ -15,6 +15,7 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 ANALYSIS_JOBS: dict[str, Path] = {}
+ANALYSIS_METADATA: dict[str, dict[str, Any]] = {}
 PROCESSING_JOBS: dict[str, dict[str, Any]] = {}
 JOBS_LOCK = threading.Lock()
 
@@ -122,6 +123,17 @@ def register_analysis_video(video_id: str, input_path: Path) -> None:
 
 def get_analysis_video(video_id: str) -> Path | None:
     return ANALYSIS_JOBS.get(video_id)
+
+
+def register_analysis_metadata(video_id: str, metadata: dict[str, Any]) -> None:
+    with JOBS_LOCK:
+        ANALYSIS_METADATA[video_id] = dict(metadata)
+
+
+def get_analysis_metadata(video_id: str) -> dict[str, Any] | None:
+    with JOBS_LOCK:
+        metadata = ANALYSIS_METADATA.get(video_id)
+        return dict(metadata) if metadata else None
 
 
 def fail_processing_job(

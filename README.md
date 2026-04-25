@@ -3,7 +3,7 @@
 The backend is now split into focused modules so `app.py` stays as the HTTP entrypoint and route layer only.
 
 ## Backend structure
-- `app.py`: Flask app setup, CORS, and HTTP routes only.
+- `app.py`: FastAPI app setup, CORS, static media routes, and HTTP/WebSocket routes only.
 - `config.py`: Centralized constants, directory paths, and environment-backed settings.
 - `core/processor.py`: Background threading, job state management, and cross-service orchestration for scenes, captions, and key moments.
 - `core/utils.py`: General helpers for cleanup, file validation, upload persistence, boolean parsing, formatting, and safe user-facing error messages.
@@ -20,11 +20,13 @@ The backend is now split into focused modules so `app.py` stays as the HTTP entr
 4. `engine/ffmpeg_tools.py` handles media transforms.
 5. Route polling reads job state through `/job_status/<job_id>`.
 
-# Phase 1: Time-Based MVP (Flask + Vue + OpenCV + FFmpeg)
+# Interactive Web Editing Suite (FastAPI + Vue 3 + Pinia + Video.js)
 
 ## What this phase adds
-- `POST /analyze_scenes`: uploads a video, analyzes frame-to-frame intensity changes with OpenCV, and returns detected scene intervals.
-- `POST /smart_cut`: takes detected scenes and builds a hype reel from the first 2 seconds of each scene.
+- `POST /detect_key_moments`: uploads a video and returns editable JSON metadata only: timestamps, scores, reasons, transcripts, and `/source/{video_id}` for original playback.
+- `POST /export_project`: accepts an EDL JSON with user-adjusted timestamps and starts a background FFmpeg export job.
+- `GET /job_status/{job_id}` and `WS /ws/job_status/{job_id}`: expose rendering/detection progress for polling or WebSocket clients.
+- Vue 3 + Pinia editing flow with a Video.js source player, AI moment timeline, and dual-handle trim slider with real-time scrubbing.
 
 ## Scene detection algorithm (OpenCV)
 1. Open video with `cv2.VideoCapture`.
@@ -34,10 +36,11 @@ The backend is now split into focused modules so `app.py` stays as the HTTP entr
 5. If difference >= threshold, mark a scene boundary timestamp.
 6. Convert boundaries into `[start, end]` scene intervals.
 
-## FFmpeg stitching approach
-- Extract clip for each scene:
-  - `ffmpeg -y -ss <scene_start> -to <scene_start+2s> -i <input> -c:v libx264 -preset veryfast -c:a aac <segment>.mp4`
-- Concatenate segments:
+## FFmpeg export approach
+- Normalize the EDL with timestamp padding and transcript-boundary expansion.
+- Extract each final edit losslessly:
+  - `ffmpeg -y -ss <start> -t <duration> -i <input> -c copy -avoid_negative_ts make_zero <segment>.mp4`
+- Concatenate segments losslessly:
   - `ffmpeg -y -f concat -safe 0 -i <concat_list.txt> -c copy <hype_reel.mp4>`
 
 ## Run
@@ -51,14 +54,13 @@ pip install -r requirements.txt
 Equivalent explicit install command:
 
 ```bash
-pip install Flask flask-cors opencv-python
+pip install -r requirements.txt
 ```
 
-Start backend with Flask:
+Start backend with FastAPI:
 
 ```bash
-export FLASK_APP=app.py or $env:FLASK_APP = "app.py"
-flask run --host 0.0.0.0 --port 5000
+python -m uvicorn app:app --host 0.0.0.0 --port 5000
 ```
 
 ```bash

@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import shutil
+import re
 from pathlib import Path
 from typing import Any
-
-from werkzeug.datastructures import FileStorage
-from werkzeug.utils import secure_filename
 
 from config import ALLOWED_EXTENSIONS, OUTPUT_DIR, TEMP_DIR
 
@@ -79,8 +77,19 @@ def parse_bool_flag(value: Any, default: bool = False) -> bool:
     raise ValueError("Invalid boolean flag. Use true or false.")
 
 
-def save_uploaded_video(video_file: FileStorage, video_id: str) -> Path:
-    safe_name = secure_filename(video_file.filename or "")
+def secure_filename(filename: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9_.-]+", "_", filename.strip())
+    normalized = normalized.strip("._")
+    return normalized or "upload.mp4"
+
+
+def save_uploaded_video(video_file: Any, video_id: str) -> Path:
+    safe_name = secure_filename(getattr(video_file, "filename", "") or "")
     input_path = TEMP_DIR / f"{video_id}_{safe_name}"
-    video_file.save(input_path)
+    save = getattr(video_file, "save", None)
+    if callable(save):
+        save(input_path)
+    else:
+        with input_path.open("wb") as output:
+            shutil.copyfileobj(video_file.file, output)
     return input_path
