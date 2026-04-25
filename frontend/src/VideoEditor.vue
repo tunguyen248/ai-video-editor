@@ -1,5 +1,47 @@
 <template>
-  <div class="app">
+  <div class="page">
+    <section class="home-hero">
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <p class="eyebrow">Built for editorial teams</p>
+          <h1>Craft standout video stories in less time.</h1>
+          <p class="hero-lede">
+            Reel helps editors move from raw footage to social-ready cuts with AI-assisted scene detection,
+            key-moment scoring, and polished captions—all in one warm, focused workspace.
+          </p>
+          <div class="hero-actions">
+            <a href="#studio" class="hero-btn primary">Open the Studio</a>
+            <a href="#capabilities" class="hero-btn ghost">Explore capabilities</a>
+          </div>
+        </div>
+        <div class="hero-panel">
+          <p class="panel-kicker">Workflow highlights</p>
+          <ul>
+            <li v-for="item in workflowHighlights" :key="item.title">
+              <strong>{{ item.title }}</strong>
+              <span>{{ item.copy }}</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="capabilities" class="home-capabilities">
+      <article v-for="feature in sellingPoints" :key="feature.title" class="capability-card">
+        <p class="card-label">{{ feature.kicker }}</p>
+        <h3>{{ feature.title }}</h3>
+        <p>{{ feature.copy }}</p>
+      </article>
+    </section>
+
+    <section id="studio" class="studio-wrap">
+      <div class="studio-head">
+        <p class="eyebrow">Studio</p>
+        <h2>Upload footage and build your first cut.</h2>
+      </div>
+    </section>
+
+    <div class="app">
     <!-- Sidebar -->
     <aside class="sidebar">
       <div class="sidebar-logo">
@@ -230,6 +272,7 @@
         </div>
       </div>
     </main>
+    </div>
   </div>
 </template>
 
@@ -259,6 +302,29 @@ const activeJobType = ref('')
 const isDragging = ref(false)
 const pollTimer = ref(null)
 const activeTool = ref('scenes')
+const workflowHighlights = [
+  { title: 'Scene Intelligence', copy: 'Auto-identify transitions and pacing opportunities in long-form footage.' },
+  { title: 'Moment Scoring', copy: 'Surface emotional peaks and high-energy sections for short-form edits.' },
+  { title: 'Caption Finishing', copy: 'Generate readable captions with exportable SRT and burned-in delivery.' }
+]
+
+const sellingPoints = [
+  {
+    kicker: 'Editorial pace',
+    title: 'Designed to support creative flow, not interrupt it.',
+    copy: 'Calm hierarchy, generous spacing, and a typography-first layout keep focus on story decisions.'
+  },
+  {
+    kicker: 'Client-ready output',
+    title: 'From rough selects to polished social cuts in one place.',
+    copy: 'Run scene analysis, compose hype reels, and preview outputs without hopping across disconnected tools.'
+  },
+  {
+    kicker: 'Production confidence',
+    title: 'Transparent progress and stage-level feedback.',
+    copy: 'Track each processing step with clear status states so editors can manage timing and delivery expectations.'
+  }
+]
 
 const tools = [
   {
@@ -524,6 +590,152 @@ onMounted(loadWhisperCapabilities)
 .app {
   display: flex;
   min-height: 100vh;
+}
+
+.page {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 10% 0%, rgba(246, 210, 173, 0.35), transparent 30%),
+    radial-gradient(circle at 95% 10%, rgba(255, 236, 208, 0.5), transparent 32%),
+    #F5F4F0;
+}
+
+.home-hero {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 72px 24px 40px;
+}
+
+.hero-grid {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 24px;
+}
+
+.eyebrow {
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #8C5D43;
+  margin-bottom: 12px;
+}
+
+.hero-copy h1 {
+  font-size: clamp(2rem, 5vw, 3.8rem);
+  line-height: 1.04;
+  letter-spacing: -0.03em;
+  max-width: 14ch;
+  margin-bottom: 16px;
+}
+
+.hero-lede {
+  max-width: 60ch;
+  color: #5A5049;
+  font-size: 1.05rem;
+}
+
+.hero-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 26px;
+}
+
+.hero-btn {
+  border-radius: 999px;
+  padding: 12px 20px;
+  text-decoration: none;
+  font-weight: 500;
+  border: 1px solid #C7BAB0;
+  color: #2B211C;
+}
+
+.hero-btn.primary {
+  background: #1A1A1A;
+  border-color: #1A1A1A;
+  color: #FDFCF9;
+}
+
+.hero-panel {
+  background: rgba(255,255,255,0.75);
+  border: 1px solid #E7DED6;
+  border-radius: 16px;
+  padding: 20px 22px;
+  backdrop-filter: blur(3px);
+}
+
+.panel-kicker {
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  color: #9B7A65;
+  margin-bottom: 14px;
+}
+
+.hero-panel ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.hero-panel li {
+  padding-bottom: 12px;
+  border-bottom: 1px solid #EFE6DD;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hero-panel li:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.hero-panel strong {
+  font-size: 15px;
+}
+
+.hero-panel span {
+  font-size: 13px;
+  color: #665D55;
+}
+
+.home-capabilities {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px 46px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.capability-card {
+  background: #fff;
+  border: 1px solid #E7DED6;
+  border-radius: 14px;
+  padding: 18px;
+}
+
+.capability-card h3 {
+  font-size: 1.16rem;
+  line-height: 1.25;
+  margin-bottom: 10px;
+}
+
+.capability-card p {
+  color: #665D55;
+}
+
+.studio-wrap {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px 18px;
+}
+
+.studio-head h2 {
+  font-size: clamp(1.5rem, 2vw, 1.9rem);
+  letter-spacing: -0.02em;
 }
 
 /* ── Sidebar ── */
@@ -1141,6 +1353,16 @@ onMounted(loadWhisperCapabilities)
 
 /* Responsive */
 @media (max-width: 900px) {
+  .home-hero {
+    padding-top: 42px;
+  }
+  .hero-grid,
+  .home-capabilities {
+    grid-template-columns: 1fr;
+  }
+  .hero-actions {
+    flex-wrap: wrap;
+  }
   .sidebar { width: 56px; }
   .logo-text, .nav-label, .sidebar-bottom { display: none; }
   .sidebar-logo { padding: 0 14px 16px; justify-content: center; }
