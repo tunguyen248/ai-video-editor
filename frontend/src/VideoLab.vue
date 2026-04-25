@@ -47,18 +47,24 @@
               <strong>Media</strong>
               <label class="mini-action">
                 Import
-                <input type="file" accept="video/*,audio/*,image/*" multiple @change="handleFileImport" />
+                <input ref="mediaFileInput" type="file" accept="video/*,audio/*,image/*" multiple @change="handleFileImport" />
               </label>
             </div>
 
             <div
               class="media-drop"
               :class="{ over: mediaDragOver }"
+              role="button"
+              tabindex="0"
+              title="Import media"
+              @click="openMediaBrowser"
+              @keydown.enter.prevent="openMediaBrowser"
+              @keydown.space.prevent="openMediaBrowser"
               @dragover.prevent="mediaDragOver = true"
               @dragleave.prevent="mediaDragOver = false"
               @drop.prevent="handleMediaFileDrop"
             >
-              <span>Drop files here</span>
+              <span>Drop files here or click to import</span>
             </div>
 
             <div class="media-grid">
@@ -147,15 +153,18 @@
           <span class="time-readout">{{ formatTime(currentTime) }} / {{ formatTime(totalDuration) }}</span>
         </div>
 
-        <div class="canvas-wrap" @dragover.prevent @drop.prevent="onCanvasDrop">
+        <div ref="previewWrapRef" class="canvas-wrap" @dragover.prevent @drop.prevent="onCanvasDrop">
           <div class="canvas-stage">
-            <div class="canvas-frame" :style="{ transform: `scale(${previewZoom / 100})` }">
+            <div class="canvas-frame" :style="canvasFrameStyle">
+              <span class="frame-badge">{{ aspectRatio }}</span>
+              <span class="frame-guide"></span>
               <div ref="canvasRef" class="canvas-inner" :style="canvasStyle">
                 <video
                   v-if="activeVideoSrc"
                   ref="videoRef"
                   class="preview-video"
                   :src="activeVideoSrc"
+                  :style="activeVideoStyle"
                   :loop="loopEnabled"
                   @loadedmetadata="onVideoLoaded"
                   @timeupdate="onTimeUpdate"
@@ -167,15 +176,27 @@
                 </div>
 
                 <div
-                  v-for="element in canvasElements"
+                  v-for="element in visibleCanvasElements"
                   :key="element.id"
                   class="canvas-element"
                   :class="{ selected: selectedElementId === element.id }"
                   :style="elementStyle(element)"
-                  @mousedown="startElementDrag($event, element)"
+                  @click.stop="selectCanvasElement(element)"
+                  @mousedown.stop="startElementDrag($event, element)"
                 >
                   {{ element.text }}
                   <span v-if="selectedElementId === element.id" class="element-outline"></span>
+                  <button
+                    v-if="selectedElementId === element.id"
+                    class="element-delete"
+                    type="button"
+                    title="Delete overlay"
+                    aria-label="Delete overlay"
+                    @mousedown.stop
+                    @click.stop="deleteCanvasElement(element.id)"
+                  >
+                    X
+                  </button>
                 </div>
               </div>
             </div>
@@ -269,7 +290,7 @@
     <section class="timeline-section">
       <div class="timeline-toolbar">
         <button class="timeline-btn" :disabled="!selectedTimelineClip" @click="splitAtPlayhead">Split</button>
-        <button class="timeline-btn" :disabled="!selectedTimelineClip" @click="deleteSelected">Delete</button>
+        <button class="timeline-btn" :disabled="!selectedTimelineClip && !selectedElement" @click="deleteSelected">Delete</button>
         <span class="divider"></span>
         <label class="timeline-zoom">
           Zoom
@@ -290,14 +311,21 @@
         </div>
 
         <div class="tracks" :style="{ width: `${trackLabelWidth + timelineWidth}px` }" @dragover.prevent @drop.prevent="onTimelineDrop">
-          <div v-for="track in tracks" :key="track.id" class="track-row" :data-track-id="track.id">
+          <div v-for="track in tracks" :key="track.id" class="track-row" :data-track-id="track.id" :style="trackRowStyle(track)">
             <div class="track-label">
               <span class="track-icon">{{ track.icon }}</span>
               <strong>{{ track.name }}</strong>
+              <small v-if="trackLaneCount(track) > 1">{{ trackLaneCount(track) }}</small>
               <button :class="{ active: track.muted }" @click.stop="track.muted = !track.muted">M</button>
               <button :class="{ active: track.locked }" @click.stop="track.locked = !track.locked">L</button>
             </div>
-            <div class="track-lane">
+            <div class="track-lane" :style="trackLaneStyle(track)">
+              <span
+                v-for="lane in trackLaneCount(track)"
+                :key="`${track.id}-lane-${lane}`"
+                class="lane-line"
+                :style="{ top: `${(lane - 1) * laneHeight}px` }"
+              ></span>
               <div
                 v-for="clip in track.clips"
                 :key="clip.id"
@@ -379,9 +407,14 @@ const future = ref([])
 
 const videoRef = ref(null)
 const canvasRef = ref(null)
+const previewWrapRef = ref(null)
+const mediaFileInput = ref(null)
 const timelineRef = ref(null)
 const dragData = ref(null)
+let previewResizeObserver = null
+let syncingTimelineToStore = false
 const trackLabelWidth = 150
+const laneHeight = 44
 
 const leftTabs = [
   { id: 'media', label: 'Media', icon: '<svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="m9 9 6 3-6 3z"/></svg>' },
@@ -450,6 +483,8 @@ const selectedTimelineClip = computed(() => {
   return null
 })
 
+const selectedElement = computed(() => canvasElements.value.find(element => element.id === selectedElementId.value) || null)
+
 const timelineDuration = computed(() => {
   const clipEnd = tracks.value.flatMap(track => track.clips).reduce((max, clip) => Math.max(max, clip.start + clip.duration), 0)
   return Math.max(totalDuration.value, clipEnd, 20)
@@ -458,12 +493,57 @@ const timelineDuration = computed(() => {
 const timelineWidth = computed(() => Math.ceil(timelineDuration.value * timelineZoom.value) + 260)
 const canExport = computed(() => Boolean(store.videoId && tracks.value.some(track => track.clips.some(clip => clip.type === 'video'))))
 
-const canvasStyle = computed(() => {
+const canvasBaseSize = computed(() => {
   const [w, h] = aspectRatio.value.split(':').map(Number)
   const base = 560
   return {
-    width: `${base}px`,
-    height: `${Math.round(base * (h / w))}px`,
+    width: base,
+    height: Math.round(base * (h / w)),
+  }
+})
+
+const canvasFrameStyle = computed(() => ({
+  width: `${Math.round(canvasBaseSize.value.width * (previewZoom.value / 100))}px`,
+  height: `${Math.round(canvasBaseSize.value.height * (previewZoom.value / 100))}px`,
+}))
+
+const canvasStyle = computed(() => ({
+  width: `${canvasBaseSize.value.width}px`,
+  height: `${canvasBaseSize.value.height}px`,
+  transform: `scale(${previewZoom.value / 100})`,
+}))
+
+const elementClipFor = elementId => tracks.value
+  .flatMap(track => track.clips)
+  .find(clip => clip.elementId === elementId)
+
+const visibleCanvasElements = computed(() => canvasElements.value.filter(element => {
+  const clip = elementClipFor(element.id)
+  if (!clip) return true
+  const isSelected = selectedElementId.value === element.id || selectedTimelineClipId.value === clip.id
+  return isSelected || (currentTime.value >= clip.start && currentTime.value <= clip.start + clip.duration)
+}))
+
+const activeVideoClip = computed(() => {
+  const selected = selectedTimelineClip.value
+  if (selected?.type === 'video') return selected
+  return tracks.value
+    .flatMap(track => track.clips)
+    .find(clip => clip.type === 'video' && currentTime.value >= clip.start && currentTime.value <= clip.start + clip.duration)
+})
+
+const activeVideoStyle = computed(() => {
+  const clip = activeVideoClip.value
+  if (!clip) return {}
+  return {
+    opacity: clip.opacity / 100,
+    transform: `scale(${clip.scale / 100}) rotate(${clip.rotation}deg)`,
+    filter: [
+      `brightness(${100 + clip.brightness}%)`,
+      `contrast(${100 + clip.contrast}%)`,
+      `saturate(${100 + clip.saturation}%)`,
+      `hue-rotate(${clip.hue}deg)`,
+    ].join(' '),
   }
 })
 
@@ -506,6 +586,71 @@ const mediaColor = type => ({
   audio: 'linear-gradient(135deg, #5b2bd8, #b857ff)',
   image: 'linear-gradient(135deg, #167a45, #7bdc7b)',
 }[type] || '#333')
+
+const openMediaBrowser = () => {
+  mediaFileInput.value?.click()
+}
+
+const trackForMediaType = type => {
+  if (type === 'audio') return tracks.value.find(track => track.type === 'audio')
+  if (type === 'video') return tracks.value.find(track => track.type === 'video')
+  return tracks.value.find(track => track.id === 'overlay')
+}
+
+const trackUsesStackedLanes = track => track?.id === 'overlay' || track?.type === 'audio'
+
+const clipsOverlap = (first, second) => (
+  first.start < second.start + second.duration
+  && first.start + first.duration > second.start
+)
+
+const firstAvailableLane = (track, clip, preferredLane = 0) => {
+  if (!trackUsesStackedLanes(track)) return 0
+  const usedLanes = new Set(track.clips.filter(candidate => candidate !== clip).map(candidate => candidate.lane || 0))
+  const maxLane = Math.max(0, ...usedLanes, preferredLane)
+  for (let lane = Math.max(0, preferredLane); lane <= maxLane + 1; lane += 1) {
+    const hasCollision = track.clips.some(candidate => (
+      candidate !== clip
+      && (candidate.lane || 0) === lane
+      && clipsOverlap(candidate, clip)
+    ))
+    if (!hasCollision) return lane
+  }
+  return maxLane + 1
+}
+
+const assignClipLane = (track, clip, preferredLane = 0) => {
+  clip.lane = firstAvailableLane(track, clip, preferredLane)
+}
+
+const compactTrackLanes = track => {
+  if (!trackUsesStackedLanes(track)) {
+    track.clips.forEach(clip => { clip.lane = 0 })
+    return
+  }
+  const placed = []
+  track.clips
+    .slice()
+    .sort((a, b) => a.start - b.start || a.duration - b.duration)
+    .forEach(clip => {
+      let lane = 0
+      while (placed.some(candidate => candidate.lane === lane && clipsOverlap(candidate, clip))) {
+        lane += 1
+      }
+      clip.lane = lane
+      placed.push(clip)
+    })
+}
+
+const trackLaneCount = track => Math.max(1, ...track.clips.map(clip => (clip.lane || 0) + 1))
+
+const trackRowStyle = track => ({
+  minHeight: `${trackLaneCount(track) * laneHeight}px`,
+})
+
+const trackLaneStyle = track => ({
+  minHeight: `${trackLaneCount(track) * laneHeight}px`,
+})
 
 const handleFileImport = event => {
   importFiles(Array.from(event.target.files || []))
@@ -595,8 +740,9 @@ const onTimelineDrop = event => {
 
 const addToTimeline = (item, start = currentTime.value) => {
   if (item.type === 'video') activateVideoItem(item)
-  const track = tracks.value.find(candidate => candidate.type === item.type) || tracks.value[0]
+  const track = trackForMediaType(item.type) || tracks.value[0]
   if (track.locked) return
+  pushHistory()
   const clip = {
     id: makeId('clip'),
     mediaId: item.id,
@@ -608,13 +754,16 @@ const addToTimeline = (item, start = currentTime.value) => {
     sourceStart: 0,
     ...defaultClipProps(),
   }
+  assignClipLane(track, clip)
   track.clips.push(clip)
   selectedTimelineClipId.value = clip.id
-  pushHistory()
+  selectedElementId.value = ''
 }
 
 const addStockAudio = audio => {
   const track = tracks.value.find(candidate => candidate.type === 'audio')
+  if (!track || track.locked) return
+  pushHistory()
   const clip = {
     id: makeId('clip'),
     type: 'audio',
@@ -625,11 +774,16 @@ const addStockAudio = audio => {
     sourceStart: 0,
     ...defaultClipProps(),
   }
+  assignClipLane(track, clip)
   track.clips.push(clip)
   selectedTimelineClipId.value = clip.id
+  selectedElementId.value = ''
 }
 
 const addText = preset => {
+  const track = tracks.value.find(candidate => candidate.id === 'overlay')
+  if (!track || track.locked) return
+  pushHistory()
   const element = {
     id: makeId('text'),
     type: 'text',
@@ -642,8 +796,7 @@ const addText = preset => {
     weight: preset.weight,
   }
   canvasElements.value.push(element)
-  selectedElementId.value = element.id
-  tracks.value[1].clips.push({
+  const clip = {
     id: makeId('clip'),
     elementId: element.id,
     type: 'text',
@@ -651,10 +804,17 @@ const addText = preset => {
     start: snapTime(currentTime.value),
     duration: 4,
     ...defaultClipProps(),
-  })
+  }
+  assignClipLane(track, clip)
+  track.clips.push(clip)
+  selectedElementId.value = element.id
+  selectedTimelineClipId.value = clip.id
 }
 
 const addSticker = sticker => {
+  const track = tracks.value.find(candidate => candidate.id === 'overlay')
+  if (!track || track.locked) return
+  pushHistory()
   const element = {
     id: makeId('sticker'),
     type: 'sticker',
@@ -667,8 +827,7 @@ const addSticker = sticker => {
     weight: 800,
   }
   canvasElements.value.push(element)
-  selectedElementId.value = element.id
-  tracks.value[1].clips.push({
+  const clip = {
     id: makeId('clip'),
     elementId: element.id,
     type: 'text',
@@ -676,28 +835,60 @@ const addSticker = sticker => {
     start: snapTime(currentTime.value),
     duration: 3,
     ...defaultClipProps(),
-  })
+  }
+  assignClipLane(track, clip)
+  track.clips.push(clip)
+  selectedElementId.value = element.id
+  selectedTimelineClipId.value = clip.id
 }
 
-const elementStyle = element => ({
-  left: `${element.x}%`,
-  top: `${element.y}%`,
-  fontFamily: element.font,
-  fontSize: `${element.size}px`,
-  color: element.color,
-  fontWeight: element.weight,
-  transform: 'translate(-50%, -50%)',
-})
+const elementStyle = element => {
+  const clip = elementClipFor(element.id)
+  return {
+    left: `${element.x}%`,
+    top: `${element.y}%`,
+    fontFamily: element.font,
+    fontSize: `${element.size}px`,
+    color: element.color,
+    fontWeight: element.weight,
+    opacity: (clip?.opacity ?? 100) / 100,
+    transform: `translate(-50%, -50%) scale(${(clip?.scale ?? 100) / 100}) rotate(${clip?.rotation ?? 0}deg)`,
+    filter: clip ? [
+      `brightness(${100 + clip.brightness}%)`,
+      `contrast(${100 + clip.contrast}%)`,
+      `saturate(${100 + clip.saturation}%)`,
+      `hue-rotate(${clip.hue}deg)`,
+    ].join(' ') : undefined,
+  }
+}
+
+const selectCanvasElement = element => {
+  selectedElementId.value = element.id
+  const clip = elementClipFor(element.id)
+  selectedTimelineClipId.value = clip?.id || ''
+}
+
+const deleteCanvasElement = elementId => {
+  const clip = elementClipFor(elementId)
+  if (clip) selectedTimelineClipId.value = clip.id
+  selectedElementId.value = elementId
+  deleteSelected()
+}
 
 const startElementDrag = (event, element) => {
-  selectedElementId.value = element.id
+  selectCanvasElement(element)
   const startX = event.clientX
   const startY = event.clientY
   const startElementX = element.x
   const startElementY = element.y
   const rect = canvasRef.value.getBoundingClientRect()
+  let moved = false
 
   const move = moveEvent => {
+    if (!moved) {
+      pushHistory()
+      moved = true
+    }
     const dx = ((moveEvent.clientX - startX) / rect.width) * 100
     const dy = ((moveEvent.clientY - startY) / rect.height) * 100
     element.x = Math.max(0, Math.min(100, startElementX + dx))
@@ -755,15 +946,26 @@ const toggleFullscreen = () => {
 const cycleRatio = () => {
   const ratios = ['16:9', '9:16', '1:1', '4:3', '21:9']
   aspectRatio.value = ratios[(ratios.indexOf(aspectRatio.value) + 1) % ratios.length]
+  nextTick(fitPreview)
 }
 
 const fitPreview = () => {
-  previewZoom.value = 100
+  if (!previewWrapRef.value) {
+    previewZoom.value = 100
+    return
+  }
+  const { width, height } = canvasBaseSize.value
+  const rect = previewWrapRef.value.getBoundingClientRect()
+  const availableWidth = Math.max(120, rect.width - 64)
+  const availableHeight = Math.max(120, rect.height - 64)
+  previewZoom.value = Math.max(25, Math.min(200, Math.floor(Math.min(availableWidth / width, availableHeight / height) * 100)))
 }
 
 const timelineClipStyle = clip => ({
   left: `${clip.start * timelineZoom.value}px`,
   width: `${Math.max(8, clip.duration * timelineZoom.value)}px`,
+  top: `${(clip.lane || 0) * laneHeight + 6}px`,
+  height: `${laneHeight - 12}px`,
   opacity: clip.opacity / 100,
 })
 
@@ -790,6 +992,7 @@ const startPlayheadDrag = () => {
 const startClipDrag = (event, track, clip, mode) => {
   if (track.locked) return
   selectedTimelineClipId.value = clip.id
+  selectedElementId.value = clip.elementId || ''
   dragData.value = {
     mode,
     clip,
@@ -797,6 +1000,7 @@ const startClipDrag = (event, track, clip, mode) => {
     startX: event.clientX,
     startClipStart: clip.start,
     startDuration: clip.duration,
+    historyPushed: false,
   }
   window.addEventListener('mousemove', onTimelineMouseMove)
   window.addEventListener('mouseup', stopTimelineDrag, { once: true })
@@ -806,6 +1010,10 @@ const onTimelineMouseMove = event => {
   const data = dragData.value
   if (!data) return
   const delta = (event.clientX - data.startX) / timelineZoom.value
+  if (!data.historyPushed) {
+    pushHistory()
+    data.historyPushed = true
+  }
   if (data.mode === 'move') {
     data.clip.start = snapTime(Math.max(0, data.startClipStart + delta))
   }
@@ -823,6 +1031,9 @@ const onTimelineMouseMove = event => {
 }
 
 const stopTimelineDrag = () => {
+  if (dragData.value?.clip && dragData.value?.track) {
+    assignClipLane(dragData.value.track, dragData.value.clip, dragData.value.clip.lane || 0)
+  }
   if (dragData.value?.clip?.type === 'video') syncStoreMomentsFromTimeline()
   dragData.value = null
   window.removeEventListener('mousemove', onTimelineMouseMove)
@@ -833,6 +1044,7 @@ const splitAtPlayhead = () => {
   const clip = selectedTimelineClip.value
   if (currentTime.value <= clip.start || currentTime.value >= clip.start + clip.duration) return
   const track = tracks.value.find(candidate => candidate.clips.includes(clip))
+  pushHistory()
   const leftDuration = currentTime.value - clip.start
   const rightDuration = clip.duration - leftDuration
   clip.duration = leftDuration
@@ -843,14 +1055,30 @@ const splitAtPlayhead = () => {
     duration: rightDuration,
     sourceStart: (clip.sourceStart || 0) + leftDuration,
   })
+  compactTrackLanes(track)
   syncStoreMomentsFromTimeline()
 }
 
 const deleteSelected = () => {
+  const elementIdsToDelete = new Set()
+  if (selectedTimelineClip.value?.elementId) elementIdsToDelete.add(selectedTimelineClip.value.elementId)
+  if (!selectedTimelineClip.value && selectedElementId.value) elementIdsToDelete.add(selectedElementId.value)
+  if (!selectedTimelineClip.value && !elementIdsToDelete.size) return
+
+  pushHistory()
   tracks.value.forEach(track => {
-    track.clips = track.clips.filter(clip => clip.id !== selectedTimelineClipId.value)
+    track.clips = track.clips.filter(clip => {
+      if (clip.id === selectedTimelineClipId.value) return false
+      if (elementIdsToDelete.has(clip.elementId)) return false
+      return true
+    })
   })
+  if (elementIdsToDelete.size) {
+    canvasElements.value = canvasElements.value.filter(element => !elementIdsToDelete.has(element.id))
+  }
+  tracks.value.forEach(compactTrackLanes)
   selectedTimelineClipId.value = ''
+  selectedElementId.value = ''
   syncStoreMomentsFromTimeline()
 }
 
@@ -865,7 +1093,14 @@ const syncStoreMomentsFromTimeline = () => {
     .filter(clip => clip.type === 'video')
     .sort((a, b) => a.start - b.start)
 
-  if (!videoClips.length) return
+  if (!videoClips.length) {
+    syncingTimelineToStore = true
+    store.moments = []
+    store.selectedClipId = ''
+    nextTick(() => { syncingTimelineToStore = false })
+    return
+  }
+  syncingTimelineToStore = true
   store.moments = videoClips.map((clip, index) => ({
     id: clip.id,
     start: Number(clip.start.toFixed(3)),
@@ -875,6 +1110,7 @@ const syncStoreMomentsFromTimeline = () => {
     reason: clip.name || `Clip ${index + 1}`,
   }))
   store.selectedClipId = selectedTimelineClipId.value || store.moments[0]?.id || ''
+  nextTick(() => { syncingTimelineToStore = false })
 }
 
 const exportCurrentProject = async () => {
@@ -989,27 +1225,71 @@ const formatTime = (seconds, withMillis = true) => {
     : `${minutes}:${String(wholeSeconds).padStart(2, '0')}`
 }
 
+const createHistorySnapshot = () => JSON.stringify({
+  tracks: tracks.value,
+  canvasElements: canvasElements.value,
+  selectedTimelineClipId: selectedTimelineClipId.value,
+  selectedElementId: selectedElementId.value,
+})
+
+const restoreHistorySnapshot = snapshot => {
+  const parsed = JSON.parse(snapshot)
+  if (Array.isArray(parsed)) {
+    tracks.value = parsed
+    tracks.value.forEach(compactTrackLanes)
+    canvasElements.value = []
+    selectedTimelineClipId.value = ''
+    selectedElementId.value = ''
+    return
+  }
+  tracks.value = parsed.tracks || tracks.value
+  tracks.value.forEach(compactTrackLanes)
+  canvasElements.value = parsed.canvasElements || []
+  selectedTimelineClipId.value = parsed.selectedTimelineClipId || ''
+  selectedElementId.value = parsed.selectedElementId || ''
+  syncStoreMomentsFromTimeline()
+}
+
 const pushHistory = () => {
-  history.value.push(JSON.stringify(tracks.value))
+  history.value.push(createHistorySnapshot())
   if (history.value.length > 30) history.value.shift()
+  future.value = []
 }
 
 const undo = () => {
   const last = history.value.pop()
   if (!last) return
-  future.value.push(JSON.stringify(tracks.value))
-  tracks.value = JSON.parse(last)
+  future.value.push(createHistorySnapshot())
+  restoreHistorySnapshot(last)
 }
 
 const redo = () => {
   const next = future.value.pop()
   if (!next) return
-  history.value.push(JSON.stringify(tracks.value))
-  tracks.value = JSON.parse(next)
+  history.value.push(createHistorySnapshot())
+  restoreHistorySnapshot(next)
 }
 
+const onKeyDown = event => {
+  const target = event.target
+  const isTyping = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable
+  if (isTyping) return
+  if (event.key === 'Delete' || event.key === 'Backspace') {
+    if (selectedTimelineClip.value || selectedElement.value) {
+      event.preventDefault()
+      deleteSelected()
+    }
+  }
+}
+
+watch(activeVideoClip, clip => {
+  if (videoRef.value) videoRef.value.playbackRate = clip?.speed || 1
+}, { deep: true })
+
 watch(() => store.moments, moments => {
+  if (syncingTimelineToStore) return
   if (!Array.isArray(moments) || !moments.length || !activeVideoSrc.value) return
+  pushHistory()
   const videoTrack = tracks.value.find(track => track.type === 'video')
   videoTrack.clips = moments.map((moment, index) => ({
     id: moment.id || makeId('clip'),
@@ -1019,6 +1299,7 @@ watch(() => store.moments, moments => {
     start: Number(moment.start || 0),
     duration: Math.max(0.1, Number(moment.end || 0) - Number(moment.start || 0)),
     sourceStart: Number(moment.start || 0),
+    lane: 0,
     ...defaultClipProps(),
   }))
   selectedTimelineClipId.value = videoTrack.clips[0]?.id || ''
@@ -1026,10 +1307,18 @@ watch(() => store.moments, moments => {
 
 onMounted(() => {
   store.loadWhisperCapabilities()
+  nextTick(fitPreview)
+  window.addEventListener('keydown', onKeyDown)
+  if (window.ResizeObserver && previewWrapRef.value) {
+    previewResizeObserver = new ResizeObserver(() => fitPreview())
+    previewResizeObserver.observe(previewWrapRef.value)
+  }
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('mousemove', onTimelineMouseMove)
+  window.removeEventListener('keydown', onKeyDown)
+  previewResizeObserver?.disconnect()
 })
 </script>
 
@@ -1052,6 +1341,10 @@ input {
 
 button {
   cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
 }
 
 .capcut-shell {
@@ -1143,6 +1436,39 @@ button {
   color: #00e5ff;
 }
 
+.icon-btn:not(:disabled):hover,
+.tool-btn:not(:disabled):hover,
+.playback-btn:not(:disabled):hover,
+.timeline-btn:not(:disabled):hover,
+.ratio-chip:not(:disabled):hover {
+  border-color: #48505c;
+  background: #22242b;
+  color: #f2f5f8;
+}
+
+.icon-btn:focus-visible,
+.tool-btn:focus-visible,
+.playback-btn:focus-visible,
+.timeline-btn:focus-visible,
+.ratio-chip:focus-visible,
+.export-btn:focus-visible,
+.left-tab:focus-visible,
+.media-drop:focus-visible,
+.media-card:focus-visible,
+.fx-tile:focus-visible,
+.preset-card:focus-visible,
+.audio-row:focus-visible,
+.sticker:focus-visible,
+.ai-tool:focus-visible,
+.caption-row:focus-visible,
+.right-tabs button:focus-visible,
+.track-label button:focus-visible,
+.play-main:focus-visible,
+.element-delete:focus-visible {
+  outline: 2px solid #00c9d8;
+  outline-offset: 2px;
+}
+
 .divider {
   width: 1px;
   height: 22px;
@@ -1175,7 +1501,12 @@ button {
 
 .export-btn:disabled {
   opacity: 0.45;
-  cursor: not-allowed;
+}
+
+.export-btn:not(:disabled):hover,
+.play-main:hover,
+.caption-generate:not(:disabled):hover {
+  filter: brightness(1.08);
 }
 
 .editor-body {
@@ -1229,6 +1560,16 @@ button {
   color: #00e5ff;
 }
 
+.left-tab:hover {
+  background: #191b21;
+  color: #d7dae1;
+}
+
+.left-tab.active:hover {
+  background: #21313d;
+  color: #00e5ff;
+}
+
 .tab-icon {
   width: 20px;
   height: 20px;
@@ -1276,6 +1617,12 @@ button {
   color: #58dce8;
   font-size: 12px;
   font-weight: 800;
+  cursor: pointer;
+}
+
+.mini-action:hover {
+  background: #263746;
+  color: #9af4ff;
 }
 
 .mini-action input {
@@ -1291,10 +1638,14 @@ button {
   background: #111216;
   color: #747782;
   font-size: 12px;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
 }
 
-.media-drop.over {
+.media-drop.over,
+.media-drop:hover {
   border-color: #00c9d8;
+  background: #132027;
   color: #00e5ff;
 }
 
@@ -1317,6 +1668,20 @@ button {
   background: #191a1f;
   color: #d8d9df;
   text-align: left;
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease, color 140ms ease;
+}
+
+.media-card:hover,
+.fx-tile:hover,
+.preset-card:hover,
+.audio-row:hover,
+.sticker:hover,
+.ai-tool:not(:disabled):hover,
+.caption-row:hover {
+  border-color: #3f4650;
+  background: #202229;
+  color: #f4f6fa;
+  transform: translateY(-1px);
 }
 
 .media-card {
@@ -1490,6 +1855,10 @@ button {
   color: #d7d9df;
 }
 
+.zoom-control button:hover {
+  color: #fff;
+}
+
 .time-readout {
   margin-left: auto;
   color: #787b84;
@@ -1499,29 +1868,63 @@ button {
 
 .canvas-wrap {
   min-height: 0;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
   overflow: hidden;
   background: radial-gradient(circle at center, #18191d, #090a0c);
 }
 
 .canvas-stage {
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
   width: 100%;
   height: 100%;
 }
 
 .canvas-frame {
-  transform-origin: center;
-  transition: transform 160ms ease;
+  position: relative;
+  flex: 0 0 auto;
+  transition: width 160ms ease, height 160ms ease;
 }
 
 .canvas-inner {
   position: relative;
   overflow: hidden;
   background: #000;
+  transform-origin: top left;
+  will-change: transform;
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.72), 0 0 0 1px #292a31;
+}
+
+.frame-guide {
+  position: absolute;
+  inset: -1px;
+  z-index: 8;
+  border: 1px solid rgba(232, 255, 71, 0.78);
+  box-shadow: 0 0 0 1px rgba(0, 229, 255, 0.22), 0 0 24px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+.frame-badge {
+  position: absolute;
+  left: 50%;
+  top: -28px;
+  z-index: 9;
+  transform: translateX(-50%);
+  padding: 4px 8px;
+  border: 1px solid #31343d;
+  border-radius: 6px;
+  background: #101115;
+  color: #e8ff47;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 900;
+  pointer-events: none;
 }
 
 .preview-video {
@@ -1529,6 +1932,7 @@ button {
   height: 100%;
   object-fit: contain;
   display: block;
+  transform-origin: center;
 }
 
 .canvas-placeholder {
@@ -1552,6 +1956,10 @@ button {
   user-select: none;
 }
 
+.canvas-element:hover {
+  border-color: rgba(0, 201, 216, 0.55);
+}
+
 .canvas-element.selected {
   border-color: #00c9d8;
 }
@@ -1561,6 +1969,29 @@ button {
   inset: -7px;
   border: 1px dashed #00c9d8;
   pointer-events: none;
+}
+
+.element-delete {
+  position: absolute;
+  top: -19px;
+  right: -19px;
+  z-index: 2;
+  width: 20px;
+  height: 20px;
+  border: 1px solid #3d414b;
+  border-radius: 999px;
+  background: #f3f4f8;
+  color: #111216;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 18px;
+  padding: 0;
+}
+
+.element-delete:hover {
+  background: #ff5b6e;
+  border-color: #ff5b6e;
+  color: #fff;
 }
 
 .play-main {
@@ -1616,6 +2047,11 @@ button {
 .right-tabs button.active {
   border-bottom-color: #00c9d8;
   color: #00e5ff;
+}
+
+.right-tabs button:hover {
+  background: #191b21;
+  color: #d7dae1;
 }
 
 .prop-panel,
@@ -1761,7 +2197,6 @@ button {
 
 .timeline-btn:disabled {
   opacity: 0.4;
-  cursor: not-allowed;
 }
 
 .timeline-zoom {
@@ -1843,7 +2278,6 @@ button {
 .track-row {
   display: grid;
   grid-template-columns: 150px minmax(0, 1fr);
-  min-height: 44px;
 }
 
 .track-label {
@@ -1851,9 +2285,9 @@ button {
   left: 0;
   z-index: 4;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 7px;
-  padding: 0 8px;
+  padding: 11px 8px 0;
   background: #141519;
   border-right: 1px solid #24252b;
   color: #858893;
@@ -1878,6 +2312,18 @@ button {
   white-space: nowrap;
 }
 
+.track-label small {
+  display: grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #1d2933;
+  color: #00e5ff;
+  font-size: 10px;
+  font-weight: 900;
+}
+
 .track-label button {
   width: 22px;
   height: 22px;
@@ -1893,6 +2339,11 @@ button {
   color: #ffcf5a;
 }
 
+.track-label button:hover {
+  background: #22242b;
+  color: #d7dae1;
+}
+
 .track-lane {
   position: relative;
   min-height: 44px;
@@ -1900,10 +2351,21 @@ button {
   box-shadow: inset 0 -1px 0 #202127;
 }
 
+.lane-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.035);
+  pointer-events: none;
+}
+
+.lane-line:first-child {
+  display: none;
+}
+
 .timeline-clip {
   position: absolute;
-  top: 6px;
-  bottom: 6px;
   display: flex;
   align-items: center;
   min-width: 8px;
@@ -1911,6 +2373,12 @@ button {
   border-radius: 6px;
   overflow: hidden;
   cursor: grab;
+  transition: filter 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
+}
+
+.timeline-clip:hover {
+  filter: brightness(1.12);
+  border-color: rgba(255, 255, 255, 0.34);
 }
 
 .timeline-clip.selected {
