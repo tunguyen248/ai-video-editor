@@ -88,6 +88,39 @@
       </header>
 
       <div class="canvas">
+        <section class="editorial-hero">
+          <div class="hero-copy">
+            <p class="hero-kicker">Built for modern post-production</p>
+            <h1>Cut faster. Keep the craft.</h1>
+            <p class="hero-lede">
+              A warmer, editorial workspace for editors who need speed without sacrificing taste.
+              Detect scenes, surface key story moments, and ship polished social cuts in minutes.
+            </p>
+            <div class="hero-tags">
+              <span>Scene intelligence</span>
+              <span>Whisper captions</span>
+              <span>Key moment scoring</span>
+            </div>
+          </div>
+          <aside class="hero-panel">
+            <p class="hero-panel-label">Workflow Snapshot</p>
+            <div class="hero-stats">
+              <article>
+                <p class="stat-value">01</p>
+                <p class="stat-label">Upload footage</p>
+              </article>
+              <article>
+                <p class="stat-value">02</p>
+                <p class="stat-label">Find the best beats</p>
+              </article>
+              <article>
+                <p class="stat-value">03</p>
+                <p class="stat-label">Export highlight-ready edits</p>
+              </article>
+            </div>
+          </aside>
+        </section>
+
         <!-- Upload zone -->
         <div
           class="upload-zone"
@@ -507,7 +540,7 @@ onMounted(loadWhisperCapabilities)
 </script>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=DM+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght,SOFT@9..144,300..700,60&display=swap');
 
 :global(*) { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -779,10 +812,112 @@ onMounted(loadWhisperCapabilities)
 /* ── Canvas ── */
 .canvas {
   flex: 1;
-  padding: 24px;
+  padding: 28px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
+}
+
+/* ── Editorial hero ── */
+.editorial-hero {
+  display: grid;
+  grid-template-columns: minmax(320px, 1.35fr) minmax(220px, 0.9fr);
+  gap: 18px;
+}
+
+.hero-copy,
+.hero-panel {
+  background: #FFFFFF;
+  border: 1px solid #E9E4DA;
+  border-radius: 14px;
+}
+
+.hero-copy {
+  padding: 30px 32px;
+  background:
+    radial-gradient(circle at 85% 12%, rgba(232, 255, 71, 0.22), transparent 35%),
+    linear-gradient(180deg, #FFFDF8 0%, #FFFFFF 100%);
+}
+
+.hero-kicker {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.11em;
+  color: #8E8575;
+  font-weight: 600;
+  margin-bottom: 14px;
+}
+
+.hero-copy h1 {
+  font-family: 'Fraunces', serif;
+  font-size: clamp(30px, 3.3vw, 44px);
+  line-height: 1.02;
+  letter-spacing: -0.02em;
+  color: #171513;
+  max-width: 10.5em;
+  margin-bottom: 14px;
+}
+
+.hero-lede {
+  font-size: 15px;
+  line-height: 1.7;
+  color: #554E43;
+  max-width: 56ch;
+  margin-bottom: 18px;
+}
+
+.hero-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.hero-tags span {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #F6F1E6;
+  border: 1px solid #E7DFD0;
+  color: #574D3F;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.hero-panel {
+  padding: 22px;
+  background: #1D1A17;
+  color: #EDE8DF;
+}
+
+.hero-panel-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: rgba(237, 232, 223, 0.62);
+  margin-bottom: 12px;
+}
+
+.hero-stats {
+  display: grid;
+  gap: 10px;
+}
+
+.hero-stats article {
+  padding: 13px 14px;
+  border: 1px solid rgba(232, 255, 71, 0.2);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.stat-value {
+  font-family: 'Fraunces', serif;
+  font-size: 24px;
+  color: #E8FF47;
+  margin-bottom: 1px;
+}
+
+.stat-label {
+  font-size: 13px;
+  color: rgba(237, 232, 223, 0.86);
 }
 
 /* ── Upload zone ── */
@@ -1147,6 +1282,8 @@ onMounted(loadWhisperCapabilities)
   .nav-item { justify-content: center; padding: 10px; }
   .topbar { flex-direction: column; align-items: stretch; gap: 10px; }
   .topbar-actions { flex-wrap: wrap; }
+  .editorial-hero { grid-template-columns: 1fr; }
+  .hero-copy { padding: 24px; }
   .results-grid { grid-template-columns: 1fr; }
   .player-card { grid-column: 1; }
 }
