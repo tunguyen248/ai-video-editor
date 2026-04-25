@@ -546,10 +546,22 @@ const readMediaDuration = item => {
   element.src = item.url
   element.onloadedmetadata = () => {
     item.duration = Number.isFinite(element.duration) ? Math.max(0.1, element.duration) : 8
+    updateMediaDuration(item)
     if (item.type === 'video' && activeVideoSrc.value === item.url) {
       totalDuration.value = Math.max(1, item.duration)
     }
   }
+}
+
+const updateMediaDuration = item => {
+  tracks.value.forEach(track => {
+    track.clips.forEach(clip => {
+      if (clip.mediaId === item.id && clip.duration <= 5.001) {
+        clip.duration = Math.max(0.2, item.duration || clip.duration)
+      }
+    })
+  })
+  if (item.type === 'video') syncStoreMomentsFromTimeline()
 }
 
 const activateVideoItem = item => {
@@ -700,7 +712,13 @@ const startElementDrag = (event, element) => {
 }
 
 const onVideoLoaded = () => {
-  totalDuration.value = Math.max(1, videoRef.value?.duration || totalDuration.value)
+  const duration = Math.max(1, videoRef.value?.duration || totalDuration.value)
+  totalDuration.value = duration
+  const activeItem = mediaItems.value.find(item => item.url === activeVideoSrc.value)
+  if (activeItem) {
+    activeItem.duration = duration
+    updateMediaDuration(activeItem)
+  }
   applyVolume()
 }
 
@@ -1450,6 +1468,8 @@ button {
 .playback-bar {
   border-top: 1px solid #24252b;
   border-bottom: 0;
+  position: relative;
+  justify-content: center;
 }
 
 .zoom-control {
@@ -1554,12 +1574,23 @@ button {
 }
 
 .volume-control {
+  position: absolute;
+  right: 126px;
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-left: auto;
   color: #858893;
   font-size: 12px;
+}
+
+.playback-bar > .playback-btn:nth-of-type(4) {
+  position: absolute;
+  right: 66px;
+}
+
+.playback-bar > .playback-btn:nth-of-type(5) {
+  position: absolute;
+  right: 14px;
 }
 
 .volume-control input {

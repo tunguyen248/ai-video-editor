@@ -1,6 +1,6 @@
 <template>
   <div class="site-shell">
-    <header class="global-header">
+    <header v-if="currentRoute !== '/lab'" class="global-header">
       <a href="#/" class="logo">
         <span class="logo-mark">◆</span>
         <span>Reel Studio</span>
