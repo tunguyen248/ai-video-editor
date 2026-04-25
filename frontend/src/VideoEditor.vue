@@ -88,6 +88,47 @@
       </header>
 
       <div class="canvas">
+        <section class="hero-panel">
+          <div class="hero-copy">
+            <p class="eyebrow">Editorial AI Video Toolkit</p>
+            <h1>Craft warmer, cinematic edits in minutes.</h1>
+            <p class="hero-sub">
+              Built for modern editors: detect rhythm-ready scenes, surface emotional highlights, and deliver polished cuts and captions with an understated, professional workflow.
+            </p>
+            <div class="hero-metrics">
+              <div>
+                <span class="metric-value">3</span>
+                <span class="metric-label">AI passes in one workspace</span>
+              </div>
+              <div>
+                <span class="metric-value">2GB</span>
+                <span class="metric-label">Large source footage support</span>
+              </div>
+              <div>
+                <span class="metric-value">GPU</span>
+                <span class="metric-label">Optional faster transcription</span>
+              </div>
+            </div>
+          </div>
+          <div class="hero-cards">
+            <article class="editorial-card">
+              <p class="card-kicker">Scene intelligence</p>
+              <h3>Find clean cut points that respect pacing.</h3>
+              <p>Automatically maps scene boundaries into a timeline so you can move from rough selects to narrative structure faster.</p>
+            </article>
+            <article class="editorial-card">
+              <p class="card-kicker">Moment scoring</p>
+              <h3>Spot standout beats worth highlighting.</h3>
+              <p>Ranks moments using audio, visual and transcription signals to prioritize clips with editorial impact.</p>
+            </article>
+            <article class="editorial-card">
+              <p class="card-kicker">Delivery ready</p>
+              <h3>Create captioned exports without leaving flow.</h3>
+              <p>Generate SRT files and burned-in captions for social and campaign publishing in one pass.</p>
+            </article>
+          </div>
+        </section>
+
         <!-- Upload zone -->
         <div
           class="upload-zone"
@@ -507,13 +548,13 @@ onMounted(loadWhisperCapabilities)
 </script>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=DM+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=DM+Mono:wght@400;500&family=Playfair+Display:wght@500;600;700&display=swap');
 
 :global(*) { box-sizing: border-box; margin: 0; padding: 0; }
 
 :global(body) {
-  background: #F5F4F0;
-  color: #1A1A1A;
+  background: radial-gradient(circle at 20% -10%, #fcf6ed 0%, #f4efe6 52%, #f1ece3 100%);
+  color: #22201d;
   font-family: 'DM Sans', sans-serif;
   font-size: 14px;
   line-height: 1.5;
@@ -685,8 +726,9 @@ onMounted(loadWhisperCapabilities)
   justify-content: space-between;
   gap: 16px;
   padding: 14px 24px;
-  background: #FFFFFF;
-  border-bottom: 1px solid #E8E6E1;
+  background: rgba(255,255,255,0.75);
+  border-bottom: 1px solid #e6ddd0;
+  backdrop-filter: blur(14px);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -782,19 +824,123 @@ onMounted(loadWhisperCapabilities)
   padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
+}
+
+.hero-panel {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 18px;
+}
+
+.hero-copy {
+  background: linear-gradient(160deg, #fffdfa 0%, #f6eee1 100%);
+  border: 1px solid #e6ddd0;
+  border-radius: 18px;
+  padding: 32px;
+  box-shadow: 0 14px 40px rgba(99, 67, 26, 0.08);
+}
+
+.eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #896c49;
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+
+.hero-copy h1 {
+  font-family: 'Playfair Display', serif;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  font-size: clamp(34px, 3vw, 44px);
+  color: #2f271f;
+  margin-bottom: 12px;
+}
+
+.hero-sub {
+  color: #655341;
+  max-width: 56ch;
+  font-size: 14.5px;
+  line-height: 1.7;
+  margin-bottom: 22px;
+}
+
+.hero-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.hero-metrics > div {
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid #eadfce;
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.metric-value {
+  display: block;
+  font-size: 22px;
+  font-weight: 600;
+  color: #2f271f;
+  margin-bottom: 2px;
+}
+
+.metric-label {
+  color: #766252;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.hero-cards {
+  display: grid;
+  gap: 10px;
+}
+
+.editorial-card {
+  background: rgba(255,255,255,0.75);
+  border: 1px solid #e6ddd0;
+  border-radius: 14px;
+  padding: 18px 18px 16px;
+}
+
+.card-kicker {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  color: #896c49;
+  margin-bottom: 7px;
+}
+
+.editorial-card h3 {
+  font-family: 'Playfair Display', serif;
+  font-weight: 600;
+  font-size: 23px;
+  line-height: 1.15;
+  margin-bottom: 7px;
+  color: #2f271f;
+}
+
+.editorial-card > p:not(.card-kicker) {
+  color: #655341;
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 /* ── Upload zone ── */
 .upload-zone {
-  background: #FFFFFF;
-  border: 1.5px dashed #D4D1C8;
-  border-radius: 12px;
+  background: rgba(255,255,255,0.72);
+  border: 1.5px dashed #cebfa7;
+  border-radius: 14px;
   transition: border-color 200ms, background 200ms;
 }
 
 .upload-zone.has-file { border-style: solid; border-color: #1A1A1A; }
-.upload-zone.dragging { border-color: #E8FF47; background: #FFFFEE; }
+.upload-zone.dragging { border-color: #cf9f5d; background: #fff8ee; }
 .upload-zone.processing { opacity: 0.6; pointer-events: none; }
 
 #video-upload { display: none; }
@@ -945,7 +1091,7 @@ onMounted(loadWhisperCapabilities)
 }
 
 .result-card {
-  background: #FFFFFF;
+  background: rgba(255,255,255,0.82);
   border: 1px solid #E8E6E1;
   border-radius: 12px;
   padding: 20px 24px;
@@ -1149,5 +1295,8 @@ onMounted(loadWhisperCapabilities)
   .topbar-actions { flex-wrap: wrap; }
   .results-grid { grid-template-columns: 1fr; }
   .player-card { grid-column: 1; }
+  .hero-panel { grid-template-columns: 1fr; }
+  .hero-copy { padding: 24px; }
+  .hero-metrics { grid-template-columns: 1fr; }
 }
 </style>
