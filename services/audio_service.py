@@ -1,3 +1,9 @@
+"""Audio feature extraction and legacy moment-scoring helpers.
+
+The current key-moment pipeline uses energy, pitch variation, and speech-rate
+signals from this module, then fuses them in ``services.moment_service``.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -17,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def overlaps(start_a: float, end_a: float, start_b: float, end_b: float) -> bool:
+    """Return whether two half-open time ranges overlap."""
     return start_a < end_b and start_b < end_a
 
 
@@ -98,6 +105,7 @@ def _merge_activity_regions(
 
 
 def analyze_audio_peaks(audio_path: Path) -> list[dict[str, float]]:
+    """Detect energetic audio regions using smoothed RMS and robust thresholds."""
     import librosa
 
     y, sample_rate = _load_audio_mono_16k(audio_path)
@@ -164,6 +172,7 @@ def analyze_audio_peaks(audio_path: Path) -> list[dict[str, float]]:
 
 
 def analyze_pitch_variance_spikes(audio_path: Path) -> list[dict[str, float]]:
+    """Detect expressive pitch-motion regions from frame-to-frame pitch changes."""
     y, sample_rate = _load_audio_mono_16k(audio_path)
     if y.size == 0:
         return []
@@ -249,6 +258,7 @@ def analyze_pitch_variance_spikes(audio_path: Path) -> list[dict[str, float]]:
 
 
 def nearest_preceding_scene_change(timestamp: float, scene_changes: list[float]) -> float:
+    """Snap a timestamp back to a nearby previous scene change when available."""
     preceding_changes = [change for change in scene_changes if change <= timestamp]
     if not preceding_changes:
         return timestamp
@@ -266,6 +276,7 @@ def calculate_audio_signal_score(
     audio_peaks: list[dict[str, float]],
     pitch_spikes: list[dict[str, float]],
 ) -> tuple[int, list[str]]:
+    """Score audio-only signals for a candidate highlight window."""
     score = 0
     reasons: list[str] = []
 
@@ -317,6 +328,7 @@ def calculate_moment_score(
     semantic_scores: dict[float, dict[str, Any]],
     scene_changes: list[float],
 ) -> tuple[int, list[str]]:
+    """Legacy integer scorer that combines audio, speech, semantic, and scene cues."""
     window_end = timestamp + MOMENT_WINDOW_SECONDS
     score = 0
     reasons: list[str] = []
@@ -386,6 +398,7 @@ def detect_key_moment_clusters(
     semantic_scores: dict[float, dict[str, Any]],
     scene_changes: list[float],
 ) -> list[dict[str, Any]]:
+    """Legacy clusterer for high-scoring fixed-size moment windows."""
     scored_windows: list[dict[str, Any]] = []
     timestamp = 0.0
 

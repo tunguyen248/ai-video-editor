@@ -1,3 +1,5 @@
+"""Key-moment scoring by fusing transcript, audio, semantic, and scene signals."""
+
 from __future__ import annotations
 
 import json
@@ -25,6 +27,7 @@ def build_transcript_windows(
     duration: float,
     window_seconds: float = SEMANTIC_WINDOW_SECONDS,
 ) -> list[dict[str, Any]]:
+    """Group transcript segments into fixed-width windows for semantic scoring."""
     windows: list[dict[str, Any]] = []
     cursor = 0.0
     while cursor < duration:
@@ -62,6 +65,7 @@ def _sample_windows_evenly(windows: list[dict[str, Any]], max_count: int) -> lis
 
 
 def _select_llm_provider() -> str:
+    """Choose the configured semantic provider from env vars and available keys."""
     provider = os.getenv("HIGHLIGHT_LLM_PROVIDER", "").strip().lower()
     if provider in {"openai", "gemini"}:
         return provider
@@ -252,6 +256,7 @@ def build_keyword_semantic_scores(
     *,
     source: str = "keyword-fallback",
 ) -> dict[float, dict[str, Any]]:
+    """Produce local semantic scores when no LLM provider succeeds."""
     strong_cues = (
         "final result",
         "let me show",
@@ -313,6 +318,7 @@ def score_transcript_windows_for_hooks(
     model: str | None = None,
     max_retries: int = 2,
 ) -> dict[float, dict[str, Any]]:
+    """Score sampled transcript windows using the configured LLM provider."""
     if not transcript_windows:
         return {}
 
@@ -330,6 +336,7 @@ def score_transcript_windows_for_hooks(
 def resolve_semantic_scores(
     transcript_windows: list[dict[str, Any]],
 ) -> tuple[dict[float, dict[str, Any]], dict[str, Any]]:
+    """Combine LLM scores with keyword backfill or return keyword fallback."""
     provider = _select_llm_provider()
     semantic_scores = score_transcript_windows_for_hooks(transcript_windows)
     if semantic_scores:
@@ -405,6 +412,7 @@ def score_moment_window(
     semantic_scores: dict[float, dict[str, Any]],
     scene_changes: list[float],
 ) -> dict[str, Any]:
+    """Calculate signal contributions for one fixed-size candidate window."""
     window_end = min(timestamp + MOMENT_WINDOW_SECONDS, duration)
     reasons: list[str] = []
     contributions: dict[str, float] = {}
@@ -495,6 +503,7 @@ def cluster_high_scoring_moments(
     semantic_scores: dict[float, dict[str, Any]],
     scene_changes: list[float],
 ) -> list[dict[str, Any]]:
+    """Merge neighboring high-scoring windows into editable moment intervals."""
     scored_windows: list[dict[str, Any]] = []
     cursor = 0.0
     while cursor < duration:
@@ -537,6 +546,7 @@ def detect_key_moments(
     transcript_segments: list[dict[str, Any]],
     scene_changes: list[float],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Run the complete moment-detection pipeline and return diagnostics."""
     transcript_windows = build_transcript_windows(transcript_segments, duration)
     semantic_scores, semantic_diagnostics = resolve_semantic_scores(transcript_windows)
     moments = cluster_high_scoring_moments(

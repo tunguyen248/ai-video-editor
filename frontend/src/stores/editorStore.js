@@ -1,3 +1,4 @@
+// Central client-side state for AI detection, source playback, trim edits, and export jobs.
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
@@ -13,6 +14,7 @@ const normalizeMoment = (moment, index) => ({
 })
 
 export const useEditorStore = defineStore('editor', () => {
+  // Job state is kept here so toolbar controls, AI panels, and export views stay synchronized.
   const selectedFile = ref(null)
   const localSourceUrl = ref('')
   const sourceVideoUrl = ref('')
@@ -37,6 +39,7 @@ export const useEditorStore = defineStore('editor', () => {
   const durationEstimate = computed(() => Math.max(1, ...moments.value.map(moment => moment.end), ...transcriptSegments.value.map(segment => Number(segment.end || 0))))
 
   const clearPollTimer = () => {
+    // Only one backend job poll loop should be active for the current project.
     if (pollTimer.value) {
       window.clearTimeout(pollTimer.value)
       pollTimer.value = null
@@ -44,6 +47,7 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   const setSelectedFile = file => {
+    // Reset derived editor state whenever the source asset changes.
     if (localSourceUrl.value) URL.revokeObjectURL(localSourceUrl.value)
     clearPollTimer()
     selectedFile.value = file
@@ -76,6 +80,7 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   const startRequest = async (path, opts) => {
+    // Backend routes return JSON for both success and error responses.
     const res = await fetch(`${API_BASE}${path}`, opts)
     const data = await res.json()
     if (!res.ok) throw new Error(data.detail || data.error || 'Request failed.')
@@ -83,6 +88,7 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   const waitForJob = (jobId, onComplete) => new Promise((resolve, reject) => {
+    // Polling keeps the UI independent from WebSocket availability in local dev.
     const poll = async () => {
       try {
         const res = await fetch(`${API_BASE}/job_status/${jobId}`)
@@ -121,6 +127,7 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   const detectKeyMoments = async () => {
+    // Upload the current file, then hydrate the editable timeline from job results.
     if (!selectedFile.value) return setError('Select a video first.')
     clearPollTimer()
     activeJobType.value = 'key_moments'
@@ -168,6 +175,7 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   const exportProject = async () => {
+    // Send the current edit decision list back to the backend for FFmpeg rendering.
     if (!videoId.value || !moments.value.length) return setError('Detect key moments before exporting.')
     clearPollTimer()
     activeJobType.value = 'export_project'

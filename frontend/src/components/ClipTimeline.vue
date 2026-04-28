@@ -1,3 +1,4 @@
+<!-- Scrollable list of AI-detected moments with scores and timestamp labels. -->
 <template>
   <aside class="timeline-panel">
     <div class="panel-head">
@@ -24,6 +25,8 @@
 </template>
 
 <script setup>
+// This lightweight component is intentionally presentational; selection state
+// and clip edits are owned by the parent/editor store.
 defineProps({
   clips: { type: Array, default: () => [] },
   selectedId: { type: String, default: '' },

@@ -1,3 +1,10 @@
+"""Shared runtime configuration for the backend pipeline.
+
+Values in this module are intentionally importable constants so service modules
+can agree on directories, analysis thresholds, chunk sizing, model names, and
+server defaults without each module reading environment variables independently.
+"""
+
 from __future__ import annotations
 
 import os

@@ -1,3 +1,4 @@
+<!-- Full editing workspace: media bin, preview canvas, AI tools, properties, and timeline. -->
 <template>
   <div class="capcut-shell">
     <header class="topbar">
@@ -353,6 +354,9 @@
 import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { API_BASE, useEditorStore } from './stores/editorStore'
 
+// This component intentionally keeps timeline interaction local while sharing AI job state
+// through the Pinia editor store. That separation lets manual edits remain responsive
+// even while backend detection/export jobs are running.
 const PropertySlider = defineComponent({
   props: {
     label: { type: String, required: true },

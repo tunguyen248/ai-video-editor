@@ -1,3 +1,5 @@
+"""FFmpeg and ffprobe integration for video extraction, chunking, and export."""
+
 from __future__ import annotations
 
 import shutil
@@ -22,6 +24,8 @@ ProgressCallback = Callable[[float, str], None]
 
 
 class FFmpegCommandError(RuntimeError):
+    """Raised when an FFmpeg command exits non-zero and includes command output."""
+
     def __init__(self, message: str, command: Sequence[str], returncode: int, stderr: str, stdout: str = "") -> None:
         self.command = list(command)
         self.returncode = returncode
@@ -32,6 +36,7 @@ class FFmpegCommandError(RuntimeError):
 
 
 def clamp_timestamp_padding(padding_seconds: float) -> float:
+    """Keep timestamp padding within render-safe minimum and maximum bounds."""
     return min(
         MAX_CLIP_TIMESTAMP_PADDING_SECONDS,
         max(MIN_CLIP_TIMESTAMP_PADDING_SECONDS, padding_seconds),
@@ -44,6 +49,7 @@ def calculate_padded_interval(
     source_duration: float,
     padding_seconds: float = CLIP_TIMESTAMP_PADDING_SECONDS,
 ) -> tuple[float, float]:
+    """Expand a clip interval without crossing source-video boundaries."""
     if source_duration <= 0:
         raise RuntimeError("Cannot pad a clip without a positive source duration.")
 
@@ -63,6 +69,8 @@ def calculate_padded_interval(
 
 @dataclass(frozen=True)
 class SmartChunk:
+    """Metadata for a video chunk plus its overlap-aware processing path."""
+
     index: int
     start: float
     end: float
@@ -84,6 +92,8 @@ class SmartChunk:
 
 
 class FFmpegEngine:
+    """Thin command builder around FFmpeg/ffprobe subprocess calls."""
+
     def __init__(self, ffmpeg_binary: str = "ffmpeg", ffprobe_binary: str = "ffprobe") -> None:
         self.ffmpeg_binary = ffmpeg_binary
         self.ffprobe_binary = ffprobe_binary
@@ -362,6 +372,8 @@ class FFmpegEngine:
 
 
 class SmartChunker:
+    """Split long videos into keyframed chunks with overlap for stable analysis."""
+
     def __init__(
         self,
         engine: FFmpegEngine,
@@ -491,10 +503,12 @@ smart_chunker = SmartChunker(ffmpeg_engine)
 
 
 def get_video_duration_ffprobe(video_path: Path) -> float:
+    """Read source duration through the shared FFmpeg engine."""
     return ffmpeg_engine.get_video_duration(video_path)
 
 
 def format_srt_timestamp(seconds: float) -> str:
+    """Format seconds using the SRT ``HH:MM:SS,mmm`` timestamp convention."""
     milliseconds = round(max(0.0, seconds) * 1000)
     hours, remainder = divmod(milliseconds, 3_600_000)
     minutes, remainder = divmod(remainder, 60_000)
@@ -503,6 +517,7 @@ def format_srt_timestamp(seconds: float) -> str:
 
 
 def write_srt_file(segments: list[dict[str, Any]], srt_path: Path) -> Path:
+    """Write Whisper transcript segments as an SRT subtitle file."""
     blocks: list[str] = []
     for index, segment in enumerate(segments, start=1):
         text = " ".join(str(segment.get("text", "")).strip().split())
@@ -560,6 +575,7 @@ def build_highlight_reel(
     subtitle_path: Path | None = None,
     video_filter: str | None = None,
 ) -> Path:
+    """Render scene-based highlight segments and optionally apply captions/filters."""
     segment_paths: list[Path] = []
     total_scenes = len(scenes)
     source_duration = ffmpeg_engine.get_video_duration(video_path)
@@ -629,6 +645,7 @@ def build_timestamp_clips(
     progress_callback: ProgressCallback | None = None,
     max_clip_seconds: float | None = HIGHLIGHT_SECONDS,
 ) -> list[Path]:
+    """Render separate padded clips from timestamp intervals."""
     clip_paths: list[Path] = []
     total_intervals = len(intervals)
     source_duration = ffmpeg_engine.get_video_duration(video_path)
@@ -667,6 +684,7 @@ def build_project_export(
     video_id: str,
     progress_callback: ProgressCallback | None = None,
 ) -> Path:
+    """Losslessly copy user-selected intervals and concatenate them into one export."""
     segment_paths: list[Path] = []
     total_intervals = len(intervals)
     source_duration = ffmpeg_engine.get_video_duration(video_path)

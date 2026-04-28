@@ -1,3 +1,5 @@
+"""General-purpose backend helpers shared by routes and job orchestration."""
+
 from __future__ import annotations
 
 import shutil
@@ -9,6 +11,7 @@ from config import ALLOWED_EXTENSIONS, OUTPUT_DIR, TEMP_DIR
 
 
 def cleanup_startup_folders() -> None:
+    """Clear transient render folders on server startup while keeping placeholders."""
     for folder in (TEMP_DIR, OUTPUT_DIR):
         folder.mkdir(parents=True, exist_ok=True)
         for entry in folder.iterdir():
@@ -22,15 +25,18 @@ def cleanup_startup_folders() -> None:
 
 
 def is_allowed_file(filename: str) -> bool:
+    """Return whether a filename has one of the supported video extensions."""
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 def format_duration(seconds: float) -> str:
+    """Format seconds as a short minutes:seconds label for progress messages."""
     minutes, remaining_seconds = divmod(max(0, int(seconds)), 60)
     return f"{minutes}:{remaining_seconds:02d}"
 
 
 def friendly_error_message(exc: Exception, fallback: str) -> str:
+    """Hide noisy model internals while preserving actionable runtime errors."""
     raw = str(exc).strip()
     if not raw:
         return fallback
@@ -49,6 +55,7 @@ def friendly_error_message(exc: Exception, fallback: str) -> str:
 
 
 def normalize_scenes(scenes: list[dict[str, float]], max_highlight_scenes: int) -> list[dict[str, float]]:
+    """Coerce user-provided scene intervals into bounded timestamp dictionaries."""
     cleaned: list[dict[str, float]] = []
     for scene in scenes:
         try:
@@ -64,6 +71,7 @@ def normalize_scenes(scenes: list[dict[str, float]], max_highlight_scenes: int) 
 
 
 def parse_bool_flag(value: Any, default: bool = False) -> bool:
+    """Parse HTML form boolean values with a caller-provided default."""
     if value is None:
         return default
     if isinstance(value, bool):
@@ -78,12 +86,14 @@ def parse_bool_flag(value: Any, default: bool = False) -> bool:
 
 
 def secure_filename(filename: str) -> str:
+    """Reduce uploaded filenames to filesystem-safe ASCII names."""
     normalized = re.sub(r"[^A-Za-z0-9_.-]+", "_", filename.strip())
     normalized = normalized.strip("._")
     return normalized or "upload.mp4"
 
 
 def save_uploaded_video(video_file: Any, video_id: str) -> Path:
+    """Save an uploaded video object into the transient temp directory."""
     safe_name = secure_filename(getattr(video_file, "filename", "") or "")
     input_path = TEMP_DIR / f"{video_id}_{safe_name}"
     save = getattr(video_file, "save", None)

@@ -1,3 +1,4 @@
+<!-- Marketing-style home view for the hash-routed Vue app. -->
 <template>
   <div class="page">
     <main>

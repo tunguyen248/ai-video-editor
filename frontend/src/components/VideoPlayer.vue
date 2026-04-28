@@ -1,3 +1,4 @@
+<!-- Video.js wrapper used by the focused moment-review workflow. -->
 <template>
   <div class="player-shell">
     <video ref="videoEl" class="video-js vjs-big-play-centered editor-video" controls playsinline preload="auto"></video>
@@ -9,6 +10,8 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import videojs from 'video.js'
 import 'video.js/dist/video-js.css'
 
+// Exposes imperative seek/play helpers because the editor needs timeline clicks
+// and detected-moment selections to drive the underlying Video.js player.
 const props = defineProps({
   source: { type: String, default: '' },
   type: { type: String, default: 'video/mp4' },

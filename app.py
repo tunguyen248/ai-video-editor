@@ -1,3 +1,10 @@
+"""HTTP API surface for the AI video editor.
+
+This module owns FastAPI setup, upload validation, and route-to-job dispatch.
+Long-running video work is delegated to ``core.processor`` so request handlers
+can return job IDs immediately and clients can poll or subscribe for progress.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -41,6 +48,7 @@ app.mount("/storage/transcripts", StaticFiles(directory=TRANSCRIPT_DIR), name="t
 
 
 def _validate_upload(video: UploadFile) -> None:
+    """Reject missing files and unsupported extensions before saving uploads."""
     if not video.filename:
         raise HTTPException(status_code=400, detail="No video file selected.")
     if not is_allowed_file(video.filename):
@@ -48,6 +56,7 @@ def _validate_upload(video: UploadFile) -> None:
 
 
 async def _save_upload(video: UploadFile, video_id: str) -> Path:
+    """Persist a validated upload under the generated video ID."""
     _validate_upload(video)
     try:
         video.file.seek(0, 2)
@@ -63,6 +72,7 @@ async def _save_upload(video: UploadFile, video_id: str) -> Path:
 
 
 def _json_error(exc: ValueError) -> HTTPException:
+    """Translate request parsing errors into consistent JSON HTTP failures."""
     return HTTPException(status_code=400, detail=str(exc))
 
 

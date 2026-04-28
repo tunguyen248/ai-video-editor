@@ -1,3 +1,4 @@
+<!-- Hash-route shell that switches between the home page and the editor lab. -->
 <template>
   <div class="site-shell">
     <header v-if="currentRoute !== '/lab'" class="global-header">

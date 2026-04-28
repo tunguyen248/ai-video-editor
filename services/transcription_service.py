@@ -1,3 +1,10 @@
+"""Whisper transcription service and chunk reconciliation helpers.
+
+This module owns device validation, model caching, serialized model inference,
+transcript persistence, speech-rate analysis, and overlap reconciliation for
+chunked videos.
+"""
+
 from __future__ import annotations
 
 import json
@@ -17,6 +24,7 @@ WHISPER_TRANSCRIBE_LOCKS: dict[tuple[str, str], threading.Lock] = {}
 
 
 def normalize_whisper_device(device: str | None) -> str:
+    """Normalize user-facing CPU/GPU labels to Whisper device names."""
     requested_device = (device or "cpu").strip().lower()
     if requested_device in {"gpu", "cuda"}:
         return "cuda"
@@ -26,6 +34,7 @@ def normalize_whisper_device(device: str | None) -> str:
 
 
 def get_whisper_capabilities() -> dict[str, Any]:
+    """Report CPU/GPU availability for the frontend device selector."""
     capabilities: dict[str, Any] = {
         "default_device": "cpu",
         "model_name": WHISPER_MODEL_NAME,
@@ -93,6 +102,7 @@ def get_whisper_capabilities() -> dict[str, Any]:
 
 
 def ensure_whisper_device_available(device: str) -> None:
+    """Raise a clear error if CUDA was requested but cannot be used."""
     if device != "cuda":
         return
 
@@ -102,6 +112,7 @@ def ensure_whisper_device_available(device: str) -> None:
 
 
 def get_cuda_vram_snapshot(device: str) -> dict[str, float] | None:
+    """Return a best-effort CUDA memory snapshot for structured logs."""
     if device != "cuda":
         return None
 
@@ -162,6 +173,7 @@ def _log_whisper_metric(
 
 
 def load_whisper_model(device: str = "cpu", *, job_id: str | None = None, model_name: str = WHISPER_MODEL_NAME) -> Any:
+    """Load or reuse a cached Whisper model for the requested device."""
     device = normalize_whisper_device(device)
     ensure_whisper_device_available(device)
 
@@ -232,6 +244,7 @@ def transcribe_with_metrics(
     context: str = "transcribe",
     model_name: str = WHISPER_MODEL_NAME,
 ) -> dict[str, Any]:
+    """Run Whisper under a per-model lock and log timing/device metrics."""
     device = normalize_whisper_device(device)
     _reset_cuda_peak_memory(device)
     started_at = time.perf_counter()
@@ -304,6 +317,7 @@ def save_transcript_copy(
     job_type: str,
     chunked: bool = False,
 ) -> dict[str, str]:
+    """Persist transcript JSON and plain text copies for download/review."""
     TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     basename = f"{video_id}_{job_type}_{timestamp}"
@@ -347,6 +361,7 @@ def save_transcript_copy(
 
 
 def format_chunk_label(chunk: dict[str, Any], total_chunks: int) -> str:
+    """Build a human-readable label for progress updates on chunked jobs."""
     start_label = format_duration(float(chunk["start"]))
     end_label = format_duration(float(chunk["end"]))
     return f"chunk {int(chunk['index']) + 1}/{total_chunks} ({start_label}-{end_label})"
@@ -356,6 +371,7 @@ def filter_caption_segments_for_chunk(
     chunk: dict[str, Any],
     segments: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """Translate chunk-local caption timestamps and drop non-final overlap tails."""
     adjusted_segments: list[dict[str, Any]] = []
     absolute_start = float(chunk["start"])
     absolute_end = float(chunk["end"])
@@ -389,6 +405,7 @@ def calculate_speech_rate_spikes(
     transcript_segments: list[dict[str, Any]],
     window_seconds: float,
 ) -> list[dict[str, float | str]]:
+    """Find transcript regions with fast delivery, slow delivery, or long pauses."""
     if not transcript_segments:
         return []
 
@@ -466,6 +483,7 @@ def merge_time_ranges(
     *,
     tolerance: float = 0.15,
 ) -> list[dict[str, Any]]:
+    """Sort and merge adjacent time ranges of the same type."""
     normalized: list[dict[str, Any]] = []
     for item in ranges:
         start = round(float(item.get("start", 0.0)), 3)
@@ -535,6 +553,7 @@ def reconcile_chunked_segments(
     *,
     overlap_seconds: float = CHUNK_OVERLAP_SECONDS,
 ) -> list[dict[str, Any]]:
+    """Merge duplicated transcript text produced by overlapped Whisper chunks."""
     reconciled: list[dict[str, Any]] = []
 
     for chunk_result in chunk_results:
@@ -577,6 +596,7 @@ def reconcile_chunked_analysis(
     *,
     overlap_seconds: float = CHUNK_OVERLAP_SECONDS,
 ) -> dict[str, Any]:
+    """Merge all chunk-level moment signals into a full-video analysis payload."""
     merged_audio_peaks: list[dict[str, Any]] = []
     merged_pitch_spikes: list[dict[str, Any]] = []
     merged_speech_rate_spikes: list[dict[str, Any]] = []

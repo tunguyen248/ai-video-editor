@@ -1,3 +1,11 @@
+"""Thread-safe in-memory job and source-video registries.
+
+The current backend is a single-process service, so queued jobs, progress, and
+analysis metadata live in dictionaries guarded by ``JOBS_LOCK``. If the app is
+scaled across processes, this module is the natural boundary to replace with a
+database, queue, or cache-backed implementation.
+"""
+
 from __future__ import annotations
 
 import threading
@@ -21,10 +29,12 @@ JOBS_LOCK = threading.Lock()
 
 
 def _clamp_progress(progress: float) -> int:
+    """Normalize arbitrary progress values to the 0-100 integer range."""
     return max(0, min(100, round(progress)))
 
 
 def create_processing_job(job_type: str) -> str:
+    """Create a queued job record and return its public job ID."""
     job_id = uuid.uuid4().hex
     with JOBS_LOCK:
         PROCESSING_JOBS[job_id] = {
@@ -50,6 +60,7 @@ def update_processing_job(
     result: dict[str, Any] | None = None,
     error: str | None = None,
 ) -> None:
+    """Patch a job record while preserving unspecified fields."""
     normalized_progress = _clamp_progress(progress) if progress is not None else None
 
     with JOBS_LOCK:
@@ -80,10 +91,12 @@ def update_processing_job(
 
 
 def update_job_progress(job_id: str, progress: float, message: str, *, state: str = "processing") -> None:
+    """Convenience wrapper for progress-only job updates."""
     update_processing_job(job_id, state=state, progress=progress, message=message)
 
 
 def make_progress_callback(job_id: str, *, start: float = 0, end: float = 100, state: str = "processing") -> ProgressCallback:
+    """Scale nested service progress into a parent job progress range."""
     span = max(0, end - start)
 
     def report(progress: float, message: str) -> None:
@@ -94,6 +107,8 @@ def make_progress_callback(job_id: str, *, start: float = 0, end: float = 100, s
 
 
 class JobProgressReporter:
+    """Small helper for services that want progress updates and structured logs."""
+
     def __init__(self, job_id: str, *, service_name: str = "JobManager") -> None:
         self.job_id = job_id
         self.logger = get_logger(service_name, job_id)
@@ -112,25 +127,30 @@ class JobProgressReporter:
 
 
 def get_processing_job(job_id: str) -> dict[str, Any] | None:
+    """Return a defensive copy of a processing job for API responses."""
     with JOBS_LOCK:
         job = PROCESSING_JOBS.get(job_id)
         return dict(job) if job else None
 
 
 def register_analysis_video(video_id: str, input_path: Path) -> None:
+    """Associate a generated video ID with the uploaded source file."""
     ANALYSIS_JOBS[video_id] = input_path
 
 
 def get_analysis_video(video_id: str) -> Path | None:
+    """Look up the source video path for a previously analyzed video."""
     return ANALYSIS_JOBS.get(video_id)
 
 
 def register_analysis_metadata(video_id: str, metadata: dict[str, Any]) -> None:
+    """Store source-level metadata needed for later project export."""
     with JOBS_LOCK:
         ANALYSIS_METADATA[video_id] = dict(metadata)
 
 
 def get_analysis_metadata(video_id: str) -> dict[str, Any] | None:
+    """Return a defensive copy of previously registered analysis metadata."""
     with JOBS_LOCK:
         metadata = ANALYSIS_METADATA.get(video_id)
         return dict(metadata) if metadata else None
@@ -145,6 +165,7 @@ def fail_processing_job(
     fallback_message: str,
     progress: float = 100,
 ) -> None:
+    """Log an exception and move a job into the terminal error state."""
     get_logger(service_name, job_id).exception(message, exc_info=(type(exc), exc, exc.__traceback__))
     update_processing_job(
         job_id,
@@ -161,6 +182,7 @@ def exception_wrapper(
     message: str | None = None,
     fallback_message: str | None = None,
 ) -> Callable[[Callable[P, R]], Callable[P, R | None]]:
+    """Wrap legacy job functions so uncaught errors are reflected in job state."""
     def decorate(func: Callable[P, R]) -> Callable[P, R | None]:
         @wraps(func)
         def wrapped(*args: P.args, **kwargs: P.kwargs) -> R | None:
@@ -184,6 +206,7 @@ def exception_wrapper(
 
 
 def start_background_job(target: Callable[..., None], *args: Any) -> None:
+    """Run a job function on a daemon thread with final exception capture."""
     job_id = str(args[0]) if args else "unknown"
     service_name = getattr(target, "__name__", "BackgroundJob")
 

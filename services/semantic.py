@@ -1,3 +1,10 @@
+"""Standalone semantic transcript-window scoring helpers.
+
+This module provides OpenAI-only semantic scoring plus keyword fallback. The
+newer ``moment_service`` contains the provider-selecting path used by the main
+key-moment pipeline, but these helpers remain available for direct experiments.
+"""
+
 from __future__ import annotations
 
 import json
@@ -17,6 +24,7 @@ def build_transcript_windows(
     duration: float,
     window_seconds: float = SEMANTIC_WINDOW_SECONDS,
 ) -> list[dict[str, Any]]:
+    """Group transcript segments into fixed-width semantic scoring windows."""
     windows: list[dict[str, Any]] = []
     cursor = 0.0
     while cursor < duration:
@@ -45,6 +53,7 @@ def build_keyword_semantic_scores(
     *,
     source: str = "keyword-fallback",
 ) -> dict[float, dict[str, Any]]:
+    """Score transcript windows with local keyword heuristics as a fallback."""
     strong_cues = (
         "final result",
         "let me show",
@@ -111,6 +120,7 @@ def score_transcript_windows_with_llm(
     model: str = LLM_SEMANTIC_MODEL,
     max_retries: int = 2,
 ) -> dict[float, dict[str, Any]]:
+    """Ask OpenAI to score transcript windows and return normalized scores."""
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not api_key:
         logger.warning(
@@ -211,6 +221,7 @@ def score_transcript_windows_with_llm(
 def resolve_semantic_scores(
     transcript_windows: list[dict[str, Any]],
 ) -> tuple[dict[float, dict[str, Any]], dict[str, Any]]:
+    """Prefer LLM scoring and fall back to keyword scoring with diagnostics."""
     semantic_scores = score_transcript_windows_with_llm(transcript_windows)
     used_llm = bool(semantic_scores)
     if used_llm:

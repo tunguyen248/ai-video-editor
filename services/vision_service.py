@@ -1,3 +1,5 @@
+"""OpenCV scene-change analysis for uploaded videos."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -23,6 +25,7 @@ SATURATION_BINS = 8
 
 
 def frame_signature(frame: np.ndarray) -> np.ndarray:
+    """Convert a frame into a normalized HSV histogram signature."""
     hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     histogram = cv2.calcHist(
         [hsv_frame],
@@ -36,6 +39,7 @@ def frame_signature(frame: np.ndarray) -> np.ndarray:
 
 
 def get_video_duration(video_path: Path) -> float:
+    """Estimate video duration from OpenCV frame count and FPS metadata."""
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise RuntimeError("Could not open uploaded video.")
@@ -49,6 +53,7 @@ def get_video_duration(video_path: Path) -> float:
 
 
 def build_scene_intervals(cut_timestamps: list[float], duration: float) -> list[SceneInterval]:
+    """Convert cut timestamps into bounded scene interval dictionaries."""
     boundaries = [0.0, *sorted(cut_timestamps)]
     if duration > 0:
         boundaries.append(duration)
@@ -67,6 +72,7 @@ def build_scene_intervals(cut_timestamps: list[float], duration: float) -> list[
 
 
 def analyze_scene_changes(video_path: Path, progress_callback: ProgressCallback | None = None) -> list[SceneInterval]:
+    """Sample frames and mark scene boundaries from histogram distance jumps."""
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise RuntimeError("Could not open uploaded video for analysis.")

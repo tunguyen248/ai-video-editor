@@ -1,3 +1,11 @@
+"""Background job orchestration for media analysis and rendering.
+
+The API layer creates jobs, then calls the functions in this module on daemon
+threads. Each job coordinates lower-level services: FFmpeg extraction/export,
+Whisper transcription, audio/vision feature analysis, semantic scoring, and
+progress updates in ``core.job_manager``.
+"""
+
 from __future__ import annotations
 
 import shutil
@@ -67,6 +75,7 @@ def process_chunk_captions(
     job_id: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
+    """Extract, transcribe, and normalize caption segments for one video chunk."""
     audio_path = TEMP_DIR / f"{chunk['path'].stem}.mp3"
     try:
         if progress_callback:
@@ -95,6 +104,7 @@ def process_chunk_key_moments(
     job_id: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
+    """Analyze one overlapped chunk and translate local timestamps to source time."""
     audio_path = TEMP_DIR / f"{chunk['path'].stem}.wav"
     try:
         if progress_callback:
@@ -200,6 +210,7 @@ def process_chunk_key_moments(
 
 
 def merge_results(result_type: str, chunk_results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Reconcile chunk outputs into the same shape returned by full-video jobs."""
     if result_type == "captions":
         return {"segments": reconcile_chunked_segments(chunk_results)}
 
@@ -207,6 +218,7 @@ def merge_results(result_type: str, chunk_results: list[dict[str, Any]]) -> dict
 
 
 def build_clip_result(clip_paths: list[Path]) -> dict[str, Any]:
+    """Convert rendered clip paths into public ``/output`` URLs."""
     paths = [f"/output/{clip_path.name}" for clip_path in clip_paths]
     return {
         "clip_paths": paths,
@@ -215,6 +227,7 @@ def build_clip_result(clip_paths: list[Path]) -> dict[str, Any]:
 
 
 def attach_clip_paths(moments: list[dict[str, Any]], clip_paths: list[Path]) -> list[dict[str, Any]]:
+    """Attach rendered preview clip URLs to detected moments."""
     enriched_moments: list[dict[str, Any]] = []
     for moment, clip_path in zip(moments, clip_paths):
         enriched_moments.append({**moment, "clip_path": f"/output/{clip_path.name}"})
@@ -222,6 +235,7 @@ def attach_clip_paths(moments: list[dict[str, Any]], clip_paths: list[Path]) -> 
 
 
 def strip_rendered_clip_fields(moments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove stale render-only URLs before persisting editable moment metadata."""
     return [
         {
             key: value
@@ -238,6 +252,7 @@ def normalize_edl_clips(
     source_duration: float,
     transcript_segments: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, float]]:
+    """Validate and pad edit-decision-list clips before export rendering."""
     normalized: list[dict[str, float]] = []
     transcript_segments = transcript_segments or []
 
@@ -275,6 +290,7 @@ def apply_transcript_boundary_padding(
     source_duration: float,
     transcript_segments: list[dict[str, Any]],
 ) -> tuple[float, float]:
+    """Extend clip boundaries to include nearby transcript edges when safe."""
     if not transcript_segments:
         return round(start, 3), round(end, 3)
 
@@ -298,6 +314,7 @@ def apply_transcript_boundary_padding(
 
 
 def run_scene_analysis_job(job_id: str, video_id: str, input_path: Path) -> None:
+    """Detect visual scene intervals and register the uploaded source video."""
     try:
         update_processing_job(job_id, state="processing", progress=4, message="Preparing upload")
         scenes = analyze_scene_changes(
@@ -324,6 +341,7 @@ def run_scene_analysis_job(job_id: str, video_id: str, input_path: Path) -> None
 
 
 def run_smart_cut_job(job_id: str, input_path: Path, scenes: list[dict[str, float]], video_id: str) -> None:
+    """Render short highlight clips from previously detected scene intervals."""
     try:
         scenes = normalize_scenes(scenes, MAX_HIGHLIGHT_SCENES)
         if not scenes:
@@ -354,6 +372,7 @@ def run_smart_cut_job(job_id: str, input_path: Path, scenes: list[dict[str, floa
 
 
 def run_caption_job(job_id: str, video_path: Path, video_id: str, whisper_device: str) -> None:
+    """Generate captions for a full video in one Whisper pass."""
     audio_path = TEMP_DIR / f"{video_id}.mp3"
     srt_path = OUTPUT_DIR / f"{video_id}.srt"
     captioned_path = OUTPUT_DIR / f"{video_id}_captioned.mp4"
@@ -406,6 +425,7 @@ def run_caption_job(job_id: str, video_path: Path, video_id: str, whisper_device
 
 
 def run_key_moment_job(job_id: str, video_path: Path, video_id: str, whisper_device: str) -> None:
+    """Detect editable key moments for a full video without chunking."""
     audio_path = TEMP_DIR / f"{video_id}_moments.wav"
     device_label = "CPU"
 
@@ -494,6 +514,7 @@ def run_key_moment_job(job_id: str, video_path: Path, video_id: str, whisper_dev
 
 
 def run_chunked_caption_job(job_id: str, video_path: Path, video_id: str, whisper_device: str) -> None:
+    """Generate captions for long videos by processing overlapped chunks."""
     srt_path = OUTPUT_DIR / f"{video_id}.srt"
     captioned_path = OUTPUT_DIR / f"{video_id}_captioned.mp4"
     chunk_defs: list[dict[str, Any]] = []
@@ -584,6 +605,7 @@ def run_chunked_caption_job(job_id: str, video_path: Path, video_id: str, whispe
 
 
 def run_chunked_key_moment_job(job_id: str, video_path: Path, video_id: str, whisper_device: str) -> None:
+    """Detect key moments for long videos by analyzing overlapped chunks."""
     chunk_defs: list[dict[str, Any]] = []
     device_label = "CPU"
 
@@ -681,6 +703,7 @@ def run_chunked_key_moment_job(job_id: str, video_path: Path, video_id: str, whi
 
 
 def run_export_project_job(job_id: str, video_id: str, clips: list[dict[str, Any]]) -> None:
+    """Render the user's edited clip list into a single exported video."""
     try:
         input_path = get_analysis_video(video_id)
         if not input_path or not input_path.exists():

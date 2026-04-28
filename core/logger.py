@@ -1,3 +1,5 @@
+"""Structured JSON logging for backend jobs and service diagnostics."""
+
 from __future__ import annotations
 
 import json
@@ -17,6 +19,8 @@ _CONFIGURED = False
 
 
 class JsonLogFormatter(logging.Formatter):
+    """Format standard logging records as compact JSON objects."""
+
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
             "timestamp": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
@@ -53,6 +57,8 @@ class JsonLogFormatter(logging.Formatter):
 
 
 class JobLoggerAdapter(logging.LoggerAdapter):
+    """Inject service and job metadata into every log record."""
+
     def process(self, msg: str, kwargs: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         extra = dict(self.extra)
         extra.update(kwargs.pop("extra", {}))
@@ -61,6 +67,7 @@ class JobLoggerAdapter(logging.LoggerAdapter):
 
 
 def configure_logging(level: int = logging.INFO) -> None:
+    """Configure stdout and rotating-file JSON logs once per process."""
     global _CONFIGURED
     if _CONFIGURED:
         return
@@ -91,6 +98,7 @@ def configure_logging(level: int = logging.INFO) -> None:
 
 
 def get_logger(service_name: str, job_id: str | None = None) -> JobLoggerAdapter:
+    """Return a logger adapter preloaded with service and optional job context."""
     configure_logging()
     return JobLoggerAdapter(
         logging.getLogger(service_name),

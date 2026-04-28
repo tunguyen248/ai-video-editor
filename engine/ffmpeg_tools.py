@@ -1,3 +1,9 @@
+"""Compatibility re-export for the FFmpeg helper API.
+
+Older imports referenced ``engine.ffmpeg_tools`` directly. New code can import
+from ``engine.ffmpeg_engine`` while this module keeps the public surface stable.
+"""
+
 from engine.ffmpeg_engine import (
     FFmpegCommandError,
     FFmpegEngine,

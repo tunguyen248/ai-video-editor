@@ -1,3 +1,4 @@
+<!-- Precision trim control for adjusting detected clip start/end times. -->
 <template>
   <section class="range-editor" v-if="clip">
     <div class="range-topbar">
@@ -59,6 +60,8 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
+// The slider emits both committed range changes and scrub targets so the parent
+// editor can keep playback aligned while the user drags either handle.
 const props = defineProps({
   clip: { type: Object, default: null },
   duration: { type: Number, default: 1 },
