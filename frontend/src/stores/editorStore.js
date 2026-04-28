@@ -13,6 +13,11 @@ const normalizeMoment = (moment, index) => ({
   reason: String(moment.reason || 'Detected highlight'),
 })
 
+const normalizeInterval = item => ({
+  start: Number(item?.start || 0),
+  end: Number(item?.end ?? item?.start ?? 0),
+})
+
 export const useEditorStore = defineStore('editor', () => {
   // Job state is kept here so toolbar controls, AI panels, and export views stay synchronized.
   const selectedFile = ref(null)
@@ -22,6 +27,11 @@ export const useEditorStore = defineStore('editor', () => {
   const videoId = ref('')
   const moments = ref([])
   const transcriptSegments = ref([])
+  const audioPeaks = ref([])
+  const pitchSpikes = ref([])
+  const speechRateSpikes = ref([])
+  const sceneChanges = ref([])
+  const semanticDiagnostics = ref({})
   const selectedClipId = ref('')
   const whisperDevice = ref('cpu')
   const smartChunking = ref(true)
@@ -57,6 +67,11 @@ export const useEditorStore = defineStore('editor', () => {
     videoId.value = ''
     moments.value = []
     transcriptSegments.value = []
+    audioPeaks.value = []
+    pitchSpikes.value = []
+    speechRateSpikes.value = []
+    sceneChanges.value = []
+    semanticDiagnostics.value = {}
     selectedClipId.value = ''
     exportUrl.value = ''
     status.value = 'idle'
@@ -134,6 +149,11 @@ export const useEditorStore = defineStore('editor', () => {
     exportUrl.value = ''
     moments.value = []
     transcriptSegments.value = []
+    audioPeaks.value = []
+    pitchSpikes.value = []
+    speechRateSpikes.value = []
+    sceneChanges.value = []
+    semanticDiagnostics.value = {}
     setStatus('processing', 'Uploading for key moment detection', 4)
 
     const fd = new FormData()
@@ -148,6 +168,11 @@ export const useEditorStore = defineStore('editor', () => {
         sourceVideoUrl.value = result.source_video_path ? `${API_BASE}${result.source_video_path}` : localSourceUrl.value
         sourceMimeType.value = selectedFile.value?.type || 'video/mp4'
         transcriptSegments.value = Array.isArray(result.transcript_segments) ? result.transcript_segments : []
+        audioPeaks.value = Array.isArray(result.audio_peaks) ? result.audio_peaks.map(normalizeInterval) : []
+        pitchSpikes.value = Array.isArray(result.pitch_spikes) ? result.pitch_spikes.map(normalizeInterval) : []
+        speechRateSpikes.value = Array.isArray(result.speech_rate_spikes) ? result.speech_rate_spikes.map(normalizeInterval) : []
+        sceneChanges.value = Array.isArray(result.scene_changes) ? result.scene_changes.map(Number).filter(Number.isFinite) : []
+        semanticDiagnostics.value = result.semantic_diagnostics || {}
         moments.value = Array.isArray(result.moments) ? result.moments.map(normalizeMoment) : []
         selectedClipId.value = moments.value[0]?.id || ''
         status.value = 'complete'
@@ -208,6 +233,11 @@ export const useEditorStore = defineStore('editor', () => {
     videoId,
     moments,
     transcriptSegments,
+    audioPeaks,
+    pitchSpikes,
+    speechRateSpikes,
+    sceneChanges,
+    semanticDiagnostics,
     selectedClipId,
     selectedClip,
     whisperDevice,

@@ -284,6 +284,50 @@
               </div>
             </div>
           </div>
+
+          <div v-if="activeRightTab === 'why'" class="explain-panel">
+            <div v-if="momentInsights.length" class="insight-list">
+              <div class="insight-overview">
+                <span class="prop-subtitle">Explainability</span>
+                <strong>{{ momentInsights.length }} key moment{{ momentInsights.length === 1 ? '' : 's' }}</strong>
+                <small>{{ semanticModeLabel }}</small>
+              </div>
+
+              <button
+                v-for="insight in momentInsights"
+                :key="insight.moment.id"
+                class="insight-card"
+                :class="{ active: insight.moment.id === selectedInsightId }"
+                @click="selectMomentInsight(insight.moment)"
+              >
+                <span class="insight-topline">
+                  <strong>{{ String(insight.index + 1).padStart(2, '0') }} - {{ formatTime(insight.moment.start, false) }}</strong>
+                  <em>{{ insight.moment.score.toFixed(1) }}</em>
+                </span>
+                <span class="score-meter" aria-hidden="true">
+                  <i :style="{ width: `${insight.scorePercent}%` }"></i>
+                </span>
+                <span class="reason-chips">
+                  <span v-for="reason in insight.reasons" :key="reason">{{ reason }}</span>
+                </span>
+                <span class="transcript-snippet">{{ insight.transcript }}</span>
+                <span class="signal-row">
+                  <span
+                    v-for="signal in insight.signals"
+                    :key="signal.key"
+                    :class="{ active: signal.active }"
+                  >
+                    {{ signal.label }} {{ signal.count }}
+                  </span>
+                </span>
+              </button>
+            </div>
+
+            <div v-else class="no-selection">
+              <strong>No AI moments yet</strong>
+              <p>Score reasons and nearby signals are not available.</p>
+            </div>
+          </div>
         </section>
       </aside>
     </main>
@@ -433,6 +477,7 @@ const rightTabs = [
   { id: 'clip', label: 'Clip' },
   { id: 'ai', label: 'AI Tools' },
   { id: 'captions', label: 'Captions' },
+  { id: 'why', label: 'Why' },
 ]
 
 const textPresets = [
@@ -496,6 +541,41 @@ const timelineDuration = computed(() => {
 
 const timelineWidth = computed(() => Math.ceil(timelineDuration.value * timelineZoom.value) + 260)
 const canExport = computed(() => Boolean(store.videoId && tracks.value.some(track => track.clips.some(clip => clip.type === 'video'))))
+const selectedInsightId = computed(() => store.selectedClipId || selectedTimelineClipId.value)
+const semanticModeLabel = computed(() => {
+  const diagnostics = store.semanticDiagnostics || {}
+  if (diagnostics.mode === 'llm') {
+    const provider = diagnostics.provider ? ` via ${diagnostics.provider}` : ''
+    return `Semantic scoring${provider}, fused with transcript, audio, and scene signals.`
+  }
+  if (diagnostics.mode === 'keyword-fallback') {
+    return 'Keyword fallback scoring, fused with transcript, audio, and scene signals.'
+  }
+  if (diagnostics.mode === 'mixed') {
+    return 'Mixed chunk scoring, fused with transcript, audio, and scene signals.'
+  }
+  return 'Score reasons, transcript context, and nearby media signals.'
+})
+
+const momentInsights = computed(() => store.moments.map((moment, index) => {
+  const start = Number(moment.start || 0)
+  const end = Number(moment.end || start)
+  const reasons = splitReasons(moment.reason)
+  const signals = [
+    signalSummary('audio', 'Audio', store.audioPeaks, start, end),
+    signalSummary('pitch', 'Pitch', store.pitchSpikes, start, end),
+    signalSummary('speech', 'Delivery', store.speechRateSpikes, start, end),
+    sceneSummary(store.sceneChanges, start, end),
+  ]
+  return {
+    index,
+    moment,
+    reasons,
+    signals,
+    transcript: transcriptSnippet(start, end),
+    scorePercent: Math.min(100, Math.max(8, (Number(moment.peak_score || moment.score || 0) / 10) * 100)),
+  }
+}))
 
 const canvasBaseSize = computed(() => {
   const [w, h] = aspectRatio.value.split(':').map(Number)
@@ -997,6 +1077,7 @@ const startClipDrag = (event, track, clip, mode) => {
   if (track.locked) return
   selectedTimelineClipId.value = clip.id
   selectedElementId.value = clip.elementId || ''
+  if (clip.type === 'video') store.selectClip(clip.id)
   dragData.value = {
     mode,
     clip,
@@ -1096,6 +1177,7 @@ const syncStoreMomentsFromTimeline = () => {
     .flatMap(track => track.clips)
     .filter(clip => clip.type === 'video')
     .sort((a, b) => a.start - b.start)
+  const previousMoments = new Map(store.moments.map(moment => [moment.id, moment]))
 
   if (!videoClips.length) {
     syncingTimelineToStore = true
@@ -1106,15 +1188,23 @@ const syncStoreMomentsFromTimeline = () => {
   }
   syncingTimelineToStore = true
   store.moments = videoClips.map((clip, index) => ({
+    ...(previousMoments.get(clip.id) || {}),
     id: clip.id,
     start: Number(clip.start.toFixed(3)),
     end: Number((clip.start + clip.duration).toFixed(3)),
-    score: 1,
-    peak_score: 1,
-    reason: clip.name || `Clip ${index + 1}`,
+    score: Number(previousMoments.get(clip.id)?.score ?? 1),
+    peak_score: Number(previousMoments.get(clip.id)?.peak_score ?? previousMoments.get(clip.id)?.score ?? 1),
+    reason: previousMoments.get(clip.id)?.reason || clip.name || `Clip ${index + 1}`,
   }))
   store.selectedClipId = selectedTimelineClipId.value || store.moments[0]?.id || ''
   nextTick(() => { syncingTimelineToStore = false })
+}
+
+const selectMomentInsight = moment => {
+  store.selectClip(moment.id)
+  selectedTimelineClipId.value = moment.id
+  selectedElementId.value = ''
+  seekTo(moment.start)
 }
 
 const exportCurrentProject = async () => {
@@ -1229,6 +1319,55 @@ const formatTime = (seconds, withMillis = true) => {
     : `${minutes}:${String(wholeSeconds).padStart(2, '0')}`
 }
 
+const rangesOverlap = (start, end, rangeStart, rangeEnd, padding = 1.25) => (
+  start - padding < rangeEnd && end + padding > rangeStart
+)
+
+const splitReasons = reason => {
+  const reasons = String(reason || '')
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean)
+  return reasons.length ? reasons.slice(0, 6) : ['detected highlight']
+}
+
+const countNearbyIntervals = (items, start, end) => (Array.isArray(items) ? items : [])
+  .filter(item => rangesOverlap(start, end, Number(item.start || 0), Number(item.end ?? item.start ?? 0)))
+  .length
+
+const signalSummary = (key, label, items, start, end) => {
+  const count = countNearbyIntervals(items, start, end)
+  return { key, label, count, active: count > 0 }
+}
+
+const sceneSummary = (sceneChanges, start, end) => {
+  const count = (Array.isArray(sceneChanges) ? sceneChanges : [])
+    .filter(time => {
+      const seconds = Number(time)
+      return Number.isFinite(seconds) && seconds >= start - 1.25 && seconds <= end + 1.25
+    })
+    .length
+  return { key: 'scene', label: 'Scene', count, active: count > 0 }
+}
+
+const transcriptSnippet = (start, end) => {
+  const text = (store.transcriptSegments || [])
+    .filter(segment => rangesOverlap(
+      start,
+      end,
+      Number(segment.start || 0),
+      Number(segment.end ?? segment.start ?? 0),
+      0.75,
+    ))
+    .map(segment => String(segment.text || '').trim())
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+
+  if (!text) return 'No transcript text near this range.'
+  return text.length > 190 ? `${text.slice(0, 187).trim()}...` : text
+}
+
 const createHistorySnapshot = () => JSON.stringify({
   tracks: tracks.value,
   canvasElements: canvasElements.value,
@@ -1289,6 +1428,10 @@ const onKeyDown = event => {
 watch(activeVideoClip, clip => {
   if (videoRef.value) videoRef.value.playbackRate = clip?.speed || 1
 }, { deep: true })
+
+watch(selectedTimelineClip, clip => {
+  if (clip?.type === 'video') store.selectClip(clip.id)
+})
 
 watch(() => store.moments, moments => {
   if (syncingTimelineToStore) return
@@ -1465,6 +1608,7 @@ button:disabled {
 .sticker:focus-visible,
 .ai-tool:focus-visible,
 .caption-row:focus-visible,
+.insight-card:focus-visible,
 .right-tabs button:focus-visible,
 .track-label button:focus-visible,
 .play-main:focus-visible,
@@ -2034,7 +2178,7 @@ button:disabled {
 
 .right-tabs {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   border-bottom: 1px solid #24252b;
 }
 
@@ -2060,7 +2204,8 @@ button:disabled {
 
 .prop-panel,
 .ai-panel,
-.caption-panel {
+.caption-panel,
+.explain-panel {
   display: grid;
   gap: 14px;
   padding: 14px;
@@ -2180,6 +2325,138 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 12px;
+}
+
+.insight-list {
+  display: grid;
+  gap: 10px;
+}
+
+.insight-overview {
+  display: grid;
+  gap: 5px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #25262d;
+}
+
+.insight-overview strong {
+  color: #f2f3f8;
+  font-size: 14px;
+}
+
+.insight-overview small {
+  color: #81848d;
+  line-height: 1.4;
+}
+
+.insight-card {
+  display: grid;
+  gap: 9px;
+  width: 100%;
+  padding: 11px;
+  border: 1px solid #24252b;
+  border-radius: 8px;
+  background: #191a1f;
+  color: #d8d9df;
+  text-align: left;
+}
+
+.insight-card:hover,
+.insight-card.active {
+  border-color: #3f4650;
+  background: #202229;
+}
+
+.insight-card.active {
+  box-shadow: inset 3px 0 0 #e8ff47;
+}
+
+.insight-topline,
+.signal-row,
+.reason-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.insight-topline {
+  justify-content: space-between;
+}
+
+.insight-topline strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #f2f3f8;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.insight-topline em {
+  display: grid;
+  place-items: center;
+  min-width: 34px;
+  min-height: 22px;
+  border-radius: 999px;
+  background: #e8ff47;
+  color: #111216;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.score-meter {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #2a2b31;
+}
+
+.score-meter i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #00c9d8, #e8ff47);
+}
+
+.reason-chips,
+.signal-row {
+  flex-wrap: wrap;
+}
+
+.reason-chips span,
+.signal-row span {
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 999px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.reason-chips span {
+  padding: 3px 7px;
+  background: #1d2933;
+  color: #86eff9;
+}
+
+.signal-row span {
+  padding: 2px 6px;
+  border: 1px solid #30323a;
+  color: #6f727c;
+}
+
+.signal-row span.active {
+  border-color: #3d4a2a;
+  color: #e8ff47;
+}
+
+.transcript-snippet {
+  color: #a3a6af;
+  line-height: 1.45;
   font-size: 12px;
 }
 
