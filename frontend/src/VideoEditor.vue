@@ -4,7 +4,7 @@
     <header v-if="currentRoute !== '/lab'" class="global-header">
       <a href="#/" class="logo">
         <span class="logo-mark">◆</span>
-        <span>Reel Studio</span>
+        <span>Alcut Studio</span>
       </a>
       <nav>
         <a href="#/" :class="{ active: currentRoute === '/' }">Home</a>
@@ -44,6 +44,7 @@ const activeView = computed(() => (currentRoute.value === '/lab' ? VideoLab : Ho
 <style scoped>
 .site-shell {
   min-height: 100vh;
+  background: var(--studio-workspace);
 }
 
 .global-header {
@@ -56,21 +57,23 @@ const activeView = computed(() => (currentRoute.value === '/lab' ? VideoLab : Ho
   justify-content: space-between;
   align-items: center;
   padding: 0.8rem 1.2rem;
-  background: rgba(20, 18, 16, 0.8);
-  backdrop-filter: blur(8px);
+  background: rgba(10, 10, 10, 0.76);
+  border-bottom: 1px solid var(--studio-border);
+  backdrop-filter: blur(24px);
 }
 
 .logo {
   display: inline-flex;
   gap: 0.45rem;
   align-items: center;
-  color: #f6ede3;
+  color: var(--studio-text);
   text-decoration: none;
   font-weight: 600;
 }
 
 .logo-mark {
-  color: #dc8b5e;
+  color: var(--studio-cyan);
+  text-shadow: 0 0 18px rgba(34, 211, 238, 0.36);
 }
 
 nav {
@@ -79,7 +82,7 @@ nav {
 }
 
 nav a {
-  color: #dccabd;
+  color: var(--studio-muted);
   text-decoration: none;
   font-size: 0.9rem;
   border: 1px solid transparent;
@@ -88,7 +91,9 @@ nav a {
 }
 
 nav a.active {
-  border-color: #9f8576;
-  color: #fff3e6;
+  border-color: rgba(34, 211, 238, 0.34);
+  color: var(--studio-cyan-hot);
+  background: rgba(34, 211, 238, 0.08);
+  box-shadow: var(--studio-shadow-cyan);
 }
 </style>

@@ -12,3 +12,4 @@ temp/
 logs/*
 storage/transcripts/
 !logs/.gitkeep
+.env

@@ -2,7 +2,9 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
-export const API_BASE = 'http://localhost:5000'
+require('dotenv').config();
+
+export const API_BASE = process.env.API_BASE;
 
 const normalizeMoment = (moment, index) => ({
   id: moment.id || `moment-${index + 1}`,

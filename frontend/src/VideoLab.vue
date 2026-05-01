@@ -1,2760 +1,805 @@
-<!-- Full editing workspace: media bin, preview canvas, AI tools, properties, and timeline. -->
+<!-- Node-based editing workspace for Alcut Studio. Designed as a DrewUI/Linear-style graph canvas. -->
 <template>
-  <div class="capcut-shell">
-    <header class="topbar">
-      <div class="top-left">
-        <div class="brand">
-          <span class="brand-mark"></span>
-          <span>AIcut Studio</span>
-        </div>
-        <input v-model="projectName" class="project-name" spellcheck="false" />
+  <div class="node-studio-shell">
+    <header class="node-topbar">
+      <div class="brand-stack">
+        <a href="#/" class="brand-link" aria-label="Back to home">
+          <span class="brand-mark">A</span>
+          <span>
+            <strong>Alcut Studio</strong>
+            <small>Node Video Graph</small>
+          </span>
+        </a>
+        <input v-model="projectName" class="project-input" spellcheck="false" />
       </div>
 
-      <div class="top-center">
-        <button class="icon-btn" title="Undo" @click="undo">↶</button>
-        <button class="icon-btn" title="Redo" @click="redo">↷</button>
-        <span class="divider"></span>
-        <button class="icon-btn" :class="{ active: snapEnabled }" title="Snap" @click="snapEnabled = !snapEnabled">⌁</button>
-        <button class="ratio-chip" @click="cycleRatio">{{ aspectRatio }}</button>
+      <div class="graph-toolbar" aria-label="Editor tools">
+        <button class="tool-chip active">Select</button>
+        <button class="tool-chip">Connect</button>
+        <button class="tool-chip">Comment</button>
+        <span class="toolbar-divider"></span>
+        <button class="icon-control" @click="zoom = Math.max(70, zoom - 10)">−</button>
+        <span class="zoom-readout">{{ zoom }}%</span>
+        <button class="icon-control" @click="zoom = Math.min(140, zoom + 10)">+</button>
       </div>
 
-      <div class="top-right">
-        <span class="autosave">{{ store.statusMessage || 'Ready' }}</span>
-        <button class="export-btn" :disabled="store.isProcessing || !canExport" @click="exportCurrentProject">
+      <div class="topbar-actions">
+        <span class="job-status" :class="store.status">{{ statusLabel }}</span>
+        <button class="export-button" :disabled="store.isProcessing || !canExport" @click="store.exportProject">
           Export
         </button>
       </div>
     </header>
 
-    <main class="editor-body">
-      <aside class="left-panel">
-        <nav class="left-tabs">
-          <button
-            v-for="tab in leftTabs"
-            :key="tab.id"
-            class="left-tab"
-            :class="{ active: activeLeftTab === tab.id }"
-            @click="activeLeftTab = tab.id"
-            :title="tab.label"
-          >
-            <span class="tab-icon" v-html="tab.icon"></span>
-            <span>{{ tab.label }}</span>
+    <main class="node-layout">
+      <aside class="asset-panel glass-panel">
+        <div class="panel-section-title">
+          <span>Input</span>
+          <small>Media source</small>
+        </div>
+
+        <label
+          class="upload-zone"
+          :class="{ 'has-file': Boolean(store.selectedFile) }"
+          @dragover.prevent="isDragging = true"
+          @dragleave.prevent="isDragging = false"
+          @drop.prevent="handleDrop"
+        >
+          <input type="file" accept="video/*" @change="handleFileInput" />
+          <span class="upload-orb"></span>
+          <strong>{{ store.selectedFile?.name || 'Drop a video file' }}</strong>
+          <small>{{ store.selectedFile ? 'Ready for analysis' : 'or click to browse local files' }}</small>
+        </label>
+
+        <div class="node-palette">
+          <div class="panel-section-title compact">
+            <span>Node Palette</span>
+            <small>Building blocks</small>
+          </div>
+
+          <button v-for="node in paletteNodes" :key="node.label" class="palette-card" @click="highlightNode(node.target)">
+            <span class="palette-icon" :class="node.accent"></span>
+            <span>
+              <strong>{{ node.label }}</strong>
+              <small>{{ node.copy }}</small>
+            </span>
           </button>
-        </nav>
+        </div>
 
-        <section class="left-content">
-          <div v-if="activeLeftTab === 'media'" class="panel-page">
-            <div class="panel-head">
-              <strong>Media</strong>
-              <label class="mini-action">
-                Import
-                <input ref="mediaFileInput" type="file" accept="video/*,audio/*,image/*" multiple @change="handleFileImport" />
-              </label>
-            </div>
-
-            <div
-              class="media-drop"
-              :class="{ over: mediaDragOver }"
-              role="button"
-              tabindex="0"
-              title="Import media"
-              @click="openMediaBrowser"
-              @keydown.enter.prevent="openMediaBrowser"
-              @keydown.space.prevent="openMediaBrowser"
-              @dragover.prevent="mediaDragOver = true"
-              @dragleave.prevent="mediaDragOver = false"
-              @drop.prevent="handleMediaFileDrop"
-            >
-              <span>Drop files here or click to import</span>
-            </div>
-
-            <div class="media-grid">
-              <button
-                v-for="item in mediaItems"
-                :key="item.id"
-                class="media-card"
-                draggable="true"
-                @dragstart="onMediaDragStart($event, item)"
-                @dblclick="addToTimeline(item)"
-              >
-                <span class="media-thumb" :style="{ background: item.color }">
-                  <span class="media-type">{{ item.type }}</span>
-                  <span v-if="item.duration" class="media-duration">{{ formatTime(item.duration, false) }}</span>
-                </span>
-                <span class="media-name">{{ item.name }}</span>
-              </button>
-
-              <div v-if="mediaItems.length === 0" class="empty-panel">
-                <strong>No media imported</strong>
-                <p>Import video, audio, or images to begin editing.</p>
-              </div>
-            </div>
-          </div>
-
-          <div v-if="activeLeftTab === 'text'" class="panel-page">
-            <div class="panel-head"><strong>Text</strong></div>
-            <button v-for="preset in textPresets" :key="preset.id" class="preset-card" @click="addText(preset)">
-              <span :style="{ fontFamily: preset.font, fontWeight: preset.weight, color: preset.color }">{{ preset.label }}</span>
-              <small>{{ preset.name }}</small>
-            </button>
-          </div>
-
-          <div v-if="activeLeftTab === 'audio'" class="panel-page">
-            <div class="panel-head"><strong>Audio</strong></div>
-            <button v-for="audio in stockAudio" :key="audio.id" class="audio-row" @click="addStockAudio(audio)">
-              <span class="mini-wave">
-                <i v-for="n in 18" :key="n" :style="{ height: `${waveHeight(audio.id, n, 24)}px` }"></i>
-              </span>
-              <span>
-                <strong>{{ audio.name }}</strong>
-                <small>{{ audio.genre }} · {{ audio.durationLabel }}</small>
-              </span>
-            </button>
-          </div>
-
-          <div v-if="activeLeftTab === 'effects'" class="panel-page">
-            <div class="panel-head"><strong>Effects</strong></div>
-            <div class="tile-grid">
-              <button v-for="fx in effects" :key="fx.id" class="fx-tile" :class="{ active: activeEffect === fx.id }" @click="activeEffect = fx.id">
-                <span :style="{ background: fx.preview }"></span>
-                <strong>{{ fx.name }}</strong>
-              </button>
-            </div>
-          </div>
-
-          <div v-if="activeLeftTab === 'transitions'" class="panel-page">
-            <div class="panel-head"><strong>Transitions</strong></div>
-            <div class="tile-grid">
-              <button v-for="transition in transitions" :key="transition.id" class="fx-tile" :class="{ active: activeTransition === transition.id }" @click="activeTransition = transition.id">
-                <span :style="{ background: transition.preview }">→</span>
-                <strong>{{ transition.name }}</strong>
-              </button>
-            </div>
-          </div>
-
-          <div v-if="activeLeftTab === 'stickers'" class="panel-page">
-            <div class="panel-head"><strong>Stickers</strong></div>
-            <div class="sticker-grid">
-              <button v-for="sticker in stickers" :key="sticker" class="sticker" @click="addSticker(sticker)">
-                {{ sticker }}
-              </button>
-            </div>
-          </div>
-        </section>
+        <button class="analysis-button" :disabled="!store.selectedFile || store.isProcessing" @click="store.detectKeyMoments">
+          {{ store.isProcessing ? 'Analyzing…' : 'Run AI Moment Graph' }}
+        </button>
       </aside>
 
-      <section class="preview-area">
-        <div class="preview-toolbar">
-          <button class="tool-btn" @click="fitPreview">Fit</button>
-          <div class="zoom-control">
-            <button @click="previewZoom = Math.max(25, previewZoom - 25)">-</button>
-            <span>{{ previewZoom }}%</span>
-            <button @click="previewZoom = Math.min(200, previewZoom + 25)">+</button>
-          </div>
-          <span class="time-readout">{{ formatTime(currentTime) }} / {{ formatTime(totalDuration) }}</span>
-        </div>
+      <section
+        class="graph-canvas-wrap"
+        :class="{ 'is-panning': dragState?.type === 'canvas' }"
+        :style="canvasBackgroundStyle"
+        @pointerdown="startCanvasPan"
+        @wheel.prevent="handleCanvasWheel"
+      >
+        <div class="canvas-glow cyan"></div>
+        <div class="canvas-glow violet"></div>
 
-        <div ref="previewWrapRef" class="canvas-wrap" @dragover.prevent @drop.prevent="onCanvasDrop">
-          <div class="canvas-stage">
-            <div class="canvas-frame" :style="canvasFrameStyle">
-              <span class="frame-badge">{{ aspectRatio }}</span>
-              <span class="frame-guide"></span>
-              <div ref="canvasRef" class="canvas-inner" :style="canvasStyle">
-                <video
-                  v-if="activeVideoSrc"
-                  ref="videoRef"
-                  class="preview-video"
-                  :src="activeVideoSrc"
-                  :style="activeVideoStyle"
-                  :loop="loopEnabled"
-                  @loadedmetadata="onVideoLoaded"
-                  @timeupdate="onTimeUpdate"
-                  @ended="isPlaying = false"
-                ></video>
-                <div v-else class="canvas-placeholder">
-                  <strong>Drop media here</strong>
-                  <span>or import from the Media panel</span>
-                </div>
+        <div class="graph-canvas" :style="canvasTransformStyle">
+          <svg class="connection-layer" viewBox="0 0 1200 720" preserveAspectRatio="none" aria-hidden="true">
+            <path v-for="edge in graphEdges" :key="edge.id" class="edge-path" :class="edge.active ? 'active' : ''" :d="edge.d" />
+          </svg>
 
-                <div
-                  v-for="element in visibleCanvasElements"
-                  :key="element.id"
-                  class="canvas-element"
-                  :class="{ selected: selectedElementId === element.id }"
-                  :style="elementStyle(element)"
-                  @click.stop="selectCanvasElement(element)"
-                  @mousedown.stop="startElementDrag($event, element)"
+          <article
+            v-for="node in graphNodes"
+            :key="node.id"
+            class="graph-node"
+            :class="[node.kind, { selected: selectedNodeId === node.id, dragging: dragState?.type === 'node' && dragState.nodeId === node.id }]"
+            :style="{ left: `${node.x}px`, top: `${node.y}px`, width: `${node.width}px` }"
+            @pointerdown.stop="startNodeDrag($event, node.id)"
+            @click="selectedNodeId = node.id"
+          >
+            <div class="node-head">
+              <span class="node-port input"></span>
+              <div>
+                <small>{{ node.kicker }}</small>
+                <strong>{{ node.title }}</strong>
+              </div>
+              <span class="node-port output"></span>
+            </div>
+
+            <div class="node-body">
+              <p>{{ node.description }}</p>
+
+              <div v-if="node.id === 'source'" class="video-preview-card">
+                <video v-if="store.sourceVideoUrl" :src="store.sourceVideoUrl" muted controls></video>
+                <div v-else class="preview-placeholder">Import video</div>
+              </div>
+
+              <div v-if="node.id === 'analysis'" class="signal-stack">
+                <span v-for="metric in signalMetrics" :key="metric.label">
+                  <i :style="{ width: `${metric.value}%` }"></i>
+                  <em>{{ metric.label }}</em>
+                </span>
+              </div>
+
+              <div v-if="node.id === 'clips'" class="clip-node-list">
+                <button
+                  v-for="clip in visibleClips"
+                  :key="clip.id"
+                  :class="{ active: clip.id === store.selectedClipId }"
+                  @click.stop="selectClip(clip.id)"
                 >
-                  {{ element.text }}
-                  <span v-if="selectedElementId === element.id" class="element-outline"></span>
-                  <button
-                    v-if="selectedElementId === element.id"
-                    class="element-delete"
-                    type="button"
-                    title="Delete overlay"
-                    aria-label="Delete overlay"
-                    @mousedown.stop
-                    @click.stop="deleteCanvasElement(element.id)"
-                  >
-                    X
-                  </button>
+                  <span>{{ formatTime(clip.start) }} → {{ formatTime(clip.end) }}</span>
+                  <strong>{{ clip.score.toFixed(1) }}</strong>
+                </button>
+                <div v-if="!visibleClips.length" class="empty-node-copy">Run analysis to generate clip nodes.</div>
+              </div>
+
+              <div v-if="node.id === 'export'" class="export-node-body">
+                <div class="export-stat">
+                  <strong>{{ store.moments.length }}</strong>
+                  <span>clips queued</span>
                 </div>
+                <a v-if="store.exportUrl" class="download-link" :href="store.exportUrl" target="_blank" rel="noreferrer">Open export</a>
+                <button v-else class="node-action" :disabled="!canExport || store.isProcessing" @click.stop="store.exportProject">Render timeline</button>
               </div>
             </div>
-          </div>
-        </div>
-
-        <div class="playback-bar">
-          <button class="playback-btn" title="Back 5s" @click="skip(-5)">«</button>
-          <button class="play-main" @click="togglePlay">{{ isPlaying ? 'Pause' : 'Play' }}</button>
-          <button class="playback-btn" title="Forward 5s" @click="skip(5)">»</button>
-
-          <label class="volume-control">
-            <span>Vol</span>
-            <input type="range" min="0" max="1" step="0.01" v-model.number="volume" @input="applyVolume" />
-          </label>
-
-          <button class="playback-btn" :class="{ active: loopEnabled }" title="Loop" @click="loopEnabled = !loopEnabled">Loop</button>
-          <button class="playback-btn" title="Fullscreen" @click="toggleFullscreen">Full</button>
+          </article>
         </div>
       </section>
 
-      <aside class="right-panel">
-        <div class="right-tabs">
-          <button v-for="tab in rightTabs" :key="tab.id" :class="{ active: activeRightTab === tab.id }" @click="activeRightTab = tab.id">
-            {{ tab.label }}
-          </button>
+      <aside class="properties-panel glass-panel">
+        <div class="panel-section-title">
+          <span>Inspector</span>
+          <small>{{ selectedNode?.title || 'No node selected' }}</small>
         </div>
 
-        <section class="right-content">
-          <div v-if="activeRightTab === 'clip'" class="prop-panel">
-            <template v-if="selectedTimelineClip">
-              <div class="prop-title">{{ selectedTimelineClip.name }}</div>
-              <PropertySlider label="Opacity" suffix="%" :min="0" :max="100" v-model="selectedTimelineClip.opacity" />
-              <PropertySlider label="Scale" suffix="%" :min="10" :max="300" v-model="selectedTimelineClip.scale" />
-              <PropertySlider label="Rotation" suffix="deg" :min="-180" :max="180" v-model="selectedTimelineClip.rotation" />
-              <PropertySlider label="Speed" suffix="x" :min="0.1" :max="4" :step="0.1" v-model="selectedTimelineClip.speed" />
-              <PropertySlider label="Volume" suffix="%" :min="0" :max="200" v-model="selectedTimelineClip.clipVolume" />
+        <section class="inspector-card">
+          <label>
+            <span>Whisper device</span>
+            <select v-model="store.whisperDevice">
+              <option value="cpu">CPU</option>
+              <option value="gpu" :disabled="!store.gpuAvailable">GPU</option>
+            </select>
+          </label>
+          <label class="switch-row">
+            <span>Smart chunking</span>
+            <input type="checkbox" v-model="store.smartChunking" />
+          </label>
+        </section>
 
-              <div class="prop-subtitle">Color Correction</div>
-              <PropertySlider label="Brightness" :min="-100" :max="100" v-model="selectedTimelineClip.brightness" />
-              <PropertySlider label="Contrast" :min="-100" :max="100" v-model="selectedTimelineClip.contrast" />
-              <PropertySlider label="Saturation" :min="-100" :max="100" v-model="selectedTimelineClip.saturation" />
-              <PropertySlider label="Hue" suffix="deg" :min="-180" :max="180" v-model="selectedTimelineClip.hue" />
-            </template>
-
-            <div v-else class="no-selection">
-              <strong>No clip selected</strong>
-              <p>Select a clip in the timeline to edit properties.</p>
-            </div>
+        <section v-if="selectedClip" class="inspector-card clip-inspector">
+          <div class="clip-inspector-head">
+            <strong>Selected Clip</strong>
+            <span>{{ selectedClip.score.toFixed(1) }}</span>
           </div>
-
-          <div v-if="activeRightTab === 'ai'" class="ai-panel">
-            <button v-for="tool in aiTools" :key="tool.id" class="ai-tool" :disabled="store.isProcessing" @click="runAiTool(tool.id)">
-              <span>{{ tool.icon }}</span>
-              <span>
-                <strong>{{ tool.name }}</strong>
-                <small>{{ tool.desc }}</small>
-              </span>
-            </button>
-
-            <div v-if="store.status !== 'idle'" class="ai-status">
-              <div class="ai-progress"><span :style="{ width: `${store.progress}%` }"></span></div>
-              <p>{{ store.statusMessage }}</p>
-            </div>
+          <p>{{ selectedClip.reason }}</p>
+          <div class="trim-fields">
+            <label>
+              <span>Start</span>
+              <input type="number" step="0.1" :value="selectedClip.start" @input="updateClip('start', $event.target.value)" />
+            </label>
+            <label>
+              <span>End</span>
+              <input type="number" step="0.1" :value="selectedClip.end" @input="updateClip('end', $event.target.value)" />
+            </label>
           </div>
+        </section>
 
-          <div v-if="activeRightTab === 'captions'" class="caption-panel">
-            <button class="caption-generate" :disabled="store.isProcessing || !activeVideoFile" @click="generateCaptions">
-              Auto-Generate Captions
-            </button>
-            <div class="caption-list">
-              <button
-                v-for="caption in captions"
-                :key="caption.id"
-                class="caption-row"
-                :class="{ active: currentTime >= caption.start && currentTime <= caption.end }"
-                @click="seekTo(caption.start)"
-              >
-                <span>{{ formatTime(caption.start) }}</span>
-                <strong>{{ caption.text }}</strong>
-              </button>
-              <div v-if="captions.length === 0" class="no-selection">
-                <p>No captions yet.</p>
-              </div>
-            </div>
+        <section class="inspector-card progress-card">
+          <div class="progress-topline">
+            <strong>Pipeline</strong>
+            <span>{{ Math.round(store.progress) }}%</span>
           </div>
-
-          <div v-if="activeRightTab === 'why'" class="explain-panel">
-            <div v-if="momentInsights.length" class="insight-list">
-              <div class="insight-overview">
-                <span class="prop-subtitle">Explainability</span>
-                <strong>{{ momentInsights.length }} key moment{{ momentInsights.length === 1 ? '' : 's' }}</strong>
-                <small>{{ semanticModeLabel }}</small>
-              </div>
-
-              <button
-                v-for="insight in momentInsights"
-                :key="insight.moment.id"
-                class="insight-card"
-                :class="{ active: insight.moment.id === selectedInsightId }"
-                @click="selectMomentInsight(insight.moment)"
-              >
-                <span class="insight-topline">
-                  <strong>{{ String(insight.index + 1).padStart(2, '0') }} - {{ formatTime(insight.moment.start, false) }}</strong>
-                  <em>{{ insight.moment.score.toFixed(1) }}</em>
-                </span>
-                <span class="score-meter" aria-hidden="true">
-                  <i :style="{ width: `${insight.scorePercent}%` }"></i>
-                </span>
-                <span class="reason-chips">
-                  <span v-for="reason in insight.reasons" :key="reason">{{ reason }}</span>
-                </span>
-                <span class="transcript-snippet">{{ insight.transcript }}</span>
-                <span class="signal-row">
-                  <span
-                    v-for="signal in insight.signals"
-                    :key="signal.key"
-                    :class="{ active: signal.active }"
-                  >
-                    {{ signal.label }} {{ signal.count }}
-                  </span>
-                </span>
-              </button>
-            </div>
-
-            <div v-else class="no-selection">
-              <strong>No AI moments yet</strong>
-              <p>Score reasons and nearby signals are not available.</p>
-            </div>
-          </div>
+          <div class="progress-track"><i :style="{ width: `${store.progress}%` }"></i></div>
+          <p>{{ store.statusMessage || 'Import a video, run detection, then export selected moments.' }}</p>
         </section>
       </aside>
     </main>
-
-    <section class="timeline-section">
-      <div class="timeline-toolbar">
-        <button class="timeline-btn" :disabled="!selectedTimelineClip" @click="splitAtPlayhead">Split</button>
-        <button class="timeline-btn" :disabled="!selectedTimelineClip && !selectedElement" @click="deleteSelected">Delete</button>
-        <span class="divider"></span>
-        <label class="timeline-zoom">
-          Zoom
-          <input type="range" min="35" max="180" v-model.number="timelineZoom" />
-        </label>
-        <span class="timeline-duration">{{ formatTime(timelineDuration) }}</span>
-      </div>
-
-      <div ref="timelineRef" class="timeline-body" @wheel.shift.prevent="scrollTimeline" @click="seekFromTimeline">
-        <div class="timeline-ruler" :style="{ width: `${timelineWidth}px` }">
-          <span v-for="tick in rulerTicks" :key="tick.key" class="ruler-tick" :style="{ left: `${tick.left}px` }">
-            <em v-if="tick.major">{{ tick.label }}</em>
-          </span>
-        </div>
-
-        <div class="playhead" :style="{ left: `${trackLabelWidth + currentTime * timelineZoom}px` }" @mousedown.stop="startPlayheadDrag">
-          <span></span>
-        </div>
-
-        <div class="tracks" :style="{ width: `${trackLabelWidth + timelineWidth}px` }" @dragover.prevent @drop.prevent="onTimelineDrop">
-          <div v-for="track in tracks" :key="track.id" class="track-row" :data-track-id="track.id" :style="trackRowStyle(track)">
-            <div class="track-label">
-              <span class="track-icon">{{ track.icon }}</span>
-              <strong>{{ track.name }}</strong>
-              <small v-if="trackLaneCount(track) > 1">{{ trackLaneCount(track) }}</small>
-              <button :class="{ active: track.muted }" @click.stop="track.muted = !track.muted">M</button>
-              <button :class="{ active: track.locked }" @click.stop="track.locked = !track.locked">L</button>
-            </div>
-            <div class="track-lane" :style="trackLaneStyle(track)">
-              <span
-                v-for="lane in trackLaneCount(track)"
-                :key="`${track.id}-lane-${lane}`"
-                class="lane-line"
-                :style="{ top: `${(lane - 1) * laneHeight}px` }"
-              ></span>
-              <div
-                v-for="clip in track.clips"
-                :key="clip.id"
-                class="timeline-clip"
-                :class="[clip.type, { selected: clip.id === selectedTimelineClipId, locked: track.locked }]"
-                :style="timelineClipStyle(clip)"
-                @mousedown.stop="startClipDrag($event, track, clip, 'move')"
-              >
-                <button class="resize-handle left" @mousedown.stop="startClipDrag($event, track, clip, 'resize-left')"></button>
-                <span v-if="clip.type === 'audio'" class="waveform">
-                  <i v-for="n in 42" :key="n" :style="{ height: `${waveHeight(clip.id, n, 28)}px` }"></i>
-                </span>
-                <span v-else class="clip-title">{{ clip.name }}</span>
-                <button class="resize-handle right" @mousedown.stop="startClipDrag($event, track, clip, 'resize-right')"></button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
   </div>
 </template>
 
 <script setup>
-import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { API_BASE, useEditorStore } from './stores/editorStore'
-
-// This component intentionally keeps timeline interaction local while sharing AI job state
-// through the Pinia editor store. That separation lets manual edits remain responsive
-// even while backend detection/export jobs are running.
-const PropertySlider = defineComponent({
-  props: {
-    label: { type: String, required: true },
-    min: { type: Number, default: 0 },
-    max: { type: Number, default: 100 },
-    step: { type: Number, default: 1 },
-    suffix: { type: String, default: '' },
-    modelValue: { type: [Number, String], default: 0 },
-  },
-  emits: ['update:modelValue'],
-  setup(props, { emit }) {
-    return () => h('label', { class: 'prop-row' }, [
-      h('span', props.label),
-      h('input', {
-        type: 'range',
-        min: props.min,
-        max: props.max,
-        step: props.step,
-        value: props.modelValue,
-        onInput: event => emit('update:modelValue', Number(event.target.value)),
-      }),
-      h('em', `${props.modelValue}${props.suffix}`),
-    ])
-  },
-})
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { useEditorStore } from './stores/editorStore'
 
 const store = useEditorStore()
+const MIN_ZOOM = 70
+const MAX_ZOOM = 140
+const projectName = ref('Untitled highlight graph')
+const zoom = ref(100)
+const selectedNodeId = ref('source')
+const isDragging = ref(false)
+const canvasPan = reactive({ x: 0, y: 0 })
+const dragState = ref(null)
 
-const projectName = ref('Untitled Project')
-const activeLeftTab = ref('media')
-const activeRightTab = ref('clip')
-const snapEnabled = ref(true)
-const showExport = ref(false)
-const aspectRatio = ref('16:9')
-const previewZoom = ref(100)
-const timelineZoom = ref(76)
-const currentTime = ref(0)
-const totalDuration = ref(1)
-const isPlaying = ref(false)
-const volume = ref(0.9)
-const loopEnabled = ref(false)
-const activeVideoSrc = ref('')
-const activeVideoFile = ref(null)
-const activeEffect = ref('')
-const activeTransition = ref('')
-const mediaDragOver = ref(false)
-const selectedElementId = ref('')
-const selectedTimelineClipId = ref('')
-const captions = ref([])
-const history = ref([])
-const future = ref([])
+const nodePositions = reactive({
+  source: { x: 70, y: 120 },
+  analysis: { x: 470, y: 70 },
+  clips: { x: 500, y: 380 },
+  export: { x: 930, y: 230 },
+})
 
-const videoRef = ref(null)
-const canvasRef = ref(null)
-const previewWrapRef = ref(null)
-const mediaFileInput = ref(null)
-const timelineRef = ref(null)
-const dragData = ref(null)
-let previewResizeObserver = null
-let syncingTimelineToStore = false
-const trackLabelWidth = 150
-const laneHeight = 44
-
-const leftTabs = [
-  { id: 'media', label: 'Media', icon: '<svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="m9 9 6 3-6 3z"/></svg>' },
-  { id: 'text', label: 'Text', icon: '<svg viewBox="0 0 24 24"><path d="M4 5h16M12 5v14M8 19h8"/></svg>' },
-  { id: 'audio', label: 'Audio', icon: '<svg viewBox="0 0 24 24"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg>' },
-  { id: 'effects', label: 'Effects', icon: '<svg viewBox="0 0 24 24"><path d="m12 2 2.8 6 6.2.6-4.7 4.2 1.4 6.2-5.7-3.2L6.3 19l1.4-6.2L3 8.6 9.2 8z"/></svg>' },
-  { id: 'transitions', label: 'Transitions', icon: '<svg viewBox="0 0 24 24"><path d="M4 7h9l-3-3m3 3-3 3M20 17h-9l3-3m-3 3 3 3"/></svg>' },
-  { id: 'stickers', label: 'Stickers', icon: '<svg viewBox="0 0 24 24"><path d="M12 3c5 0 9 4 9 9v2l-7 7h-2a9 9 0 0 1 0-18z"/><path d="M14 21v-5a2 2 0 0 1 2-2h5"/></svg>' },
+const paletteNodes = [
+  { label: 'Source', copy: 'Raw media input', accent: 'cyan', target: 'source' },
+  { label: 'Analyze', copy: 'Whisper + signal pass', accent: 'violet', target: 'analysis' },
+  { label: 'Clip Stack', copy: 'Detected highlights', accent: 'teal', target: 'clips' },
+  { label: 'Export', copy: 'Render edit list', accent: 'amber', target: 'export' },
 ]
 
-const rightTabs = [
-  { id: 'clip', label: 'Clip' },
-  { id: 'ai', label: 'AI Tools' },
-  { id: 'captions', label: 'Captions' },
-  { id: 'why', label: 'Why' },
-]
-
-const textPresets = [
-  { id: 'title', name: 'Title', label: 'Bold Title', font: 'Inter', weight: 800, color: '#ffffff', size: 42 },
-  { id: 'subtitle', name: 'Subtitle', label: 'Clean subtitle', font: 'Inter', weight: 600, color: '#f4f4f4', size: 28 },
-  { id: 'hook', name: 'Hook', label: 'Viral Hook', font: 'Impact', weight: 700, color: '#e8ff47', size: 40 },
-]
-
-const stockAudio = [
-  { id: 'beat-1', name: 'Pulse Drive', genre: 'Electronic', duration: 24, durationLabel: '0:24' },
-  { id: 'beat-2', name: 'Soft Focus', genre: 'Ambient', duration: 36, durationLabel: '0:36' },
-  { id: 'beat-3', name: 'Creator Pop', genre: 'Pop', duration: 18, durationLabel: '0:18' },
-]
-
-const effects = [
-  { id: 'glow', name: 'Glow', preview: 'linear-gradient(135deg, #113, #58f)' },
-  { id: 'film', name: 'Film', preview: 'linear-gradient(135deg, #222, #a87)' },
-  { id: 'punch', name: 'Punch', preview: 'linear-gradient(135deg, #222, #f44)' },
-  { id: 'dream', name: 'Dream', preview: 'linear-gradient(135deg, #243, #b7f)' },
-]
-
-const transitions = [
-  { id: 'fade', name: 'Fade', preview: 'linear-gradient(90deg, #111, #777)' },
-  { id: 'slide', name: 'Slide', preview: 'linear-gradient(90deg, #075, #0cf)' },
-  { id: 'wipe', name: 'Wipe', preview: 'linear-gradient(90deg, #1a1a1a 48%, #e8ff47 50%)' },
-  { id: 'zoom', name: 'Zoom', preview: 'radial-gradient(circle, #e8ff47, #111)' },
-]
-
-const stickers = ['🔥', '✨', '⭐', '💬', '🚀', '❤️', '✅', '🎯', 'LOL', 'WOW', 'NEW', 'AI']
-
-const aiTools = [
-  { id: 'smart-cut', icon: '✂', name: 'Smart Cut', desc: 'Detect editable key moments' },
-  { id: 'scene-detect', icon: '▦', name: 'Scene Detect', desc: 'Call /analyze_scenes' },
-  { id: 'captions', icon: 'CC', name: 'Auto Captions', desc: 'Call /generate_captions' },
-  { id: 'background', icon: 'AI', name: 'Background Remove', desc: 'Coming soon' },
-  { id: 'beat', icon: '♪', name: 'Beat Sync', desc: 'Coming soon' },
-]
-
-const mediaItems = ref([])
-const canvasElements = ref([])
-const tracks = ref([
-  { id: 'video', type: 'video', icon: 'V', name: 'Video', muted: false, locked: false, clips: [] },
-  { id: 'overlay', type: 'overlay', icon: 'T', name: 'Overlay', muted: false, locked: false, clips: [] },
-  { id: 'audio', type: 'audio', icon: 'A', name: 'Audio', muted: false, locked: false, clips: [] },
+const graphNodes = computed(() => [
+  {
+    id: 'source',
+    kind: 'source-node',
+    kicker: 'INPUT',
+    title: 'Source Video',
+    description: store.selectedFile ? store.selectedFile.name : 'Attach the raw clip that feeds the editing graph.',
+    ...nodePositions.source,
+    width: 300,
+  },
+  {
+    id: 'analysis',
+    kind: 'analysis-node',
+    kicker: 'AI PASS',
+    title: 'Moment Detector',
+    description: 'Scores transcript density, audio peaks, pitch spikes, and scene changes.',
+    ...nodePositions.analysis,
+    width: 330,
+  },
+  {
+    id: 'clips',
+    kind: 'clips-node',
+    kicker: 'EDIT DECISIONS',
+    title: 'Clip Stack',
+    description: `${store.moments.length} detected clips are available for review and trim edits.`,
+    ...nodePositions.clips,
+    width: 360,
+  },
+  {
+    id: 'export',
+    kind: 'export-node',
+    kicker: 'OUTPUT',
+    title: 'Export Renderer',
+    description: 'Sends the current edit decision list to the backend render pipeline.',
+    ...nodePositions.export,
+    width: 290,
+  },
 ])
 
-const selectedTimelineClip = computed(() => {
-  for (const track of tracks.value) {
-    const found = track.clips.find(clip => clip.id === selectedTimelineClipId.value)
-    if (found) return found
-  }
-  return null
+const getGraphNode = id => graphNodes.value.find(node => node.id === id)
+
+const nodeAnchor = (node, side) => ({
+  x: node.x + (side === 'right' ? node.width : 0),
+  y: node.y + 96,
 })
 
-const selectedElement = computed(() => canvasElements.value.find(element => element.id === selectedElementId.value) || null)
+const edgePath = (fromId, toId) => {
+  const from = getGraphNode(fromId)
+  const to = getGraphNode(toId)
+  if (!from || !to) return ''
+  const start = nodeAnchor(from, 'right')
+  const end = nodeAnchor(to, 'left')
+  const tension = Math.max(80, Math.abs(end.x - start.x) * 0.45)
+  return `M ${start.x} ${start.y} C ${start.x + tension} ${start.y}, ${end.x - tension} ${end.y}, ${end.x} ${end.y}`
+}
 
-const timelineDuration = computed(() => {
-  const clipEnd = tracks.value.flatMap(track => track.clips).reduce((max, clip) => Math.max(max, clip.start + clip.duration), 0)
-  return Math.max(totalDuration.value, clipEnd, 20)
-})
+const graphEdges = computed(() => [
+  { id: 'source-analysis', active: Boolean(store.selectedFile), d: edgePath('source', 'analysis') },
+  { id: 'analysis-clips', active: store.moments.length > 0, d: edgePath('analysis', 'clips') },
+  { id: 'clips-export', active: store.moments.length > 0, d: edgePath('clips', 'export') },
+])
 
-const timelineWidth = computed(() => Math.ceil(timelineDuration.value * timelineZoom.value) + 260)
-const canExport = computed(() => Boolean(store.videoId && tracks.value.some(track => track.clips.some(clip => clip.type === 'video'))))
-const selectedInsightId = computed(() => store.selectedClipId || selectedTimelineClipId.value)
-const semanticModeLabel = computed(() => {
-  const diagnostics = store.semanticDiagnostics || {}
-  if (diagnostics.mode === 'llm') {
-    const provider = diagnostics.provider ? ` via ${diagnostics.provider}` : ''
-    return `Semantic scoring${provider}, fused with transcript, audio, and scene signals.`
-  }
-  if (diagnostics.mode === 'keyword-fallback') {
-    return 'Keyword fallback scoring, fused with transcript, audio, and scene signals.'
-  }
-  if (diagnostics.mode === 'mixed') {
-    return 'Mixed chunk scoring, fused with transcript, audio, and scene signals.'
-  }
-  return 'Score reasons, transcript context, and nearby media signals.'
-})
+const signalMetrics = computed(() => [
+  { label: 'Audio peaks', value: Math.min(100, store.audioPeaks.length * 16) || 14 },
+  { label: 'Scene cuts', value: Math.min(100, store.sceneChanges.length * 12) || 22 },
+  { label: 'Speech rate', value: Math.min(100, store.speechRateSpikes.length * 18) || 31 },
+])
 
-const momentInsights = computed(() => store.moments.map((moment, index) => {
-  const start = Number(moment.start || 0)
-  const end = Number(moment.end || start)
-  const reasons = splitReasons(moment.reason)
-  const signals = [
-    signalSummary('audio', 'Audio', store.audioPeaks, start, end),
-    signalSummary('pitch', 'Pitch', store.pitchSpikes, start, end),
-    signalSummary('speech', 'Delivery', store.speechRateSpikes, start, end),
-    sceneSummary(store.sceneChanges, start, end),
-  ]
-  return {
-    index,
-    moment,
-    reasons,
-    signals,
-    transcript: transcriptSnippet(start, end),
-    scorePercent: Math.min(100, Math.max(8, (Number(moment.peak_score || moment.score || 0) / 10) * 100)),
-  }
+const visibleClips = computed(() => store.moments.slice(0, 5))
+const selectedNode = computed(() => graphNodes.value.find(node => node.id === selectedNodeId.value))
+const selectedClip = computed(() => store.selectedClip)
+const canExport = computed(() => Boolean(store.videoId && store.moments.length))
+const statusLabel = computed(() => store.statusMessage || (store.selectedFile ? 'Media loaded' : 'Ready'))
+const zoomScale = computed(() => zoom.value / 100)
+const canvasTransformStyle = computed(() => ({
+  transform: `translate(${canvasPan.x}px, ${canvasPan.y}px) scale(${zoomScale.value})`,
+}))
+const canvasBackgroundStyle = computed(() => ({
+  backgroundPosition: `${canvasPan.x}px ${canvasPan.y}px, ${canvasPan.x}px ${canvasPan.y}px, center, center`,
 }))
 
-const canvasBaseSize = computed(() => {
-  const [w, h] = aspectRatio.value.split(':').map(Number)
-  const base = 560
-  return {
-    width: base,
-    height: Math.round(base * (h / w)),
-  }
-})
-
-const canvasFrameStyle = computed(() => ({
-  width: `${Math.round(canvasBaseSize.value.width * (previewZoom.value / 100))}px`,
-  height: `${Math.round(canvasBaseSize.value.height * (previewZoom.value / 100))}px`,
-}))
-
-const canvasStyle = computed(() => ({
-  width: `${canvasBaseSize.value.width}px`,
-  height: `${canvasBaseSize.value.height}px`,
-  transform: `scale(${previewZoom.value / 100})`,
-}))
-
-const elementClipFor = elementId => tracks.value
-  .flatMap(track => track.clips)
-  .find(clip => clip.elementId === elementId)
-
-const visibleCanvasElements = computed(() => canvasElements.value.filter(element => {
-  const clip = elementClipFor(element.id)
-  if (!clip) return true
-  const isSelected = selectedElementId.value === element.id || selectedTimelineClipId.value === clip.id
-  return isSelected || (currentTime.value >= clip.start && currentTime.value <= clip.start + clip.duration)
-}))
-
-const activeVideoClip = computed(() => {
-  const selected = selectedTimelineClip.value
-  if (selected?.type === 'video') return selected
-  return tracks.value
-    .flatMap(track => track.clips)
-    .find(clip => clip.type === 'video' && currentTime.value >= clip.start && currentTime.value <= clip.start + clip.duration)
-})
-
-const activeVideoStyle = computed(() => {
-  const clip = activeVideoClip.value
-  if (!clip) return {}
-  return {
-    opacity: clip.opacity / 100,
-    transform: `scale(${clip.scale / 100}) rotate(${clip.rotation}deg)`,
-    filter: [
-      `brightness(${100 + clip.brightness}%)`,
-      `contrast(${100 + clip.contrast}%)`,
-      `saturate(${100 + clip.saturation}%)`,
-      `hue-rotate(${clip.hue}deg)`,
-    ].join(' '),
-  }
-})
-
-const rulerTicks = computed(() => {
-  const step = timelineZoom.value > 120 ? 1 : 5
-  const count = Math.ceil(timelineDuration.value / step)
-  return Array.from({ length: count + 1 }, (_, index) => {
-    const seconds = index * step
-    return {
-      key: `${seconds}-${timelineZoom.value}`,
-      left: trackLabelWidth + seconds * timelineZoom.value,
-      major: index % 2 === 0,
-      label: formatTime(seconds, false),
-    }
-  })
-})
-
-const defaultClipProps = () => ({
-  opacity: 100,
-  scale: 100,
-  rotation: 0,
-  speed: 1,
-  clipVolume: 100,
-  brightness: 0,
-  contrast: 0,
-  saturation: 0,
-  hue: 0,
-})
-
-const makeId = prefix => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-
-const mediaTypeFromFile = file => {
-  if (file.type.startsWith('video/')) return 'video'
-  if (file.type.startsWith('audio/')) return 'audio'
-  return 'image'
+const handleFileInput = event => {
+  const file = event.target.files?.[0]
+  if (file) store.setSelectedFile(file)
 }
 
-const mediaColor = type => ({
-  video: 'linear-gradient(135deg, #0d6efd, #00c9d8)',
-  audio: 'linear-gradient(135deg, #5b2bd8, #b857ff)',
-  image: 'linear-gradient(135deg, #167a45, #7bdc7b)',
-}[type] || '#333')
-
-const openMediaBrowser = () => {
-  mediaFileInput.value?.click()
+const handleDrop = event => {
+  isDragging.value = false
+  const file = Array.from(event.dataTransfer?.files || []).find(item => item.type.startsWith('video/'))
+  if (file) store.setSelectedFile(file)
 }
 
-const trackForMediaType = type => {
-  if (type === 'audio') return tracks.value.find(track => track.type === 'audio')
-  if (type === 'video') return tracks.value.find(track => track.type === 'video')
-  return tracks.value.find(track => track.id === 'overlay')
+const highlightNode = id => {
+  selectedNodeId.value = id
 }
 
-const trackUsesStackedLanes = track => track?.id === 'overlay' || track?.type === 'audio'
-
-const clipsOverlap = (first, second) => (
-  first.start < second.start + second.duration
-  && first.start + first.duration > second.start
-)
-
-const firstAvailableLane = (track, clip, preferredLane = 0) => {
-  if (!trackUsesStackedLanes(track)) return 0
-  const usedLanes = new Set(track.clips.filter(candidate => candidate !== clip).map(candidate => candidate.lane || 0))
-  const maxLane = Math.max(0, ...usedLanes, preferredLane)
-  for (let lane = Math.max(0, preferredLane); lane <= maxLane + 1; lane += 1) {
-    const hasCollision = track.clips.some(candidate => (
-      candidate !== clip
-      && (candidate.lane || 0) === lane
-      && clipsOverlap(candidate, clip)
-    ))
-    if (!hasCollision) return lane
-  }
-  return maxLane + 1
+const selectClip = id => {
+  store.selectClip(id)
+  selectedNodeId.value = 'clips'
 }
 
-const assignClipLane = (track, clip, preferredLane = 0) => {
-  clip.lane = firstAvailableLane(track, clip, preferredLane)
+const updateClip = (field, value) => {
+  if (!selectedClip.value) return
+  const nextStart = field === 'start' ? Number(value) : selectedClip.value.start
+  const nextEnd = field === 'end' ? Number(value) : selectedClip.value.end
+  store.updateClipRange(selectedClip.value.id, nextStart, nextEnd)
 }
 
-const compactTrackLanes = track => {
-  if (!trackUsesStackedLanes(track)) {
-    track.clips.forEach(clip => { clip.lane = 0 })
-    return
-  }
-  const placed = []
-  track.clips
-    .slice()
-    .sort((a, b) => a.start - b.start || a.duration - b.duration)
-    .forEach(clip => {
-      let lane = 0
-      while (placed.some(candidate => candidate.lane === lane && clipsOverlap(candidate, clip))) {
-        lane += 1
-      }
-      clip.lane = lane
-      placed.push(clip)
-    })
+const formatTime = seconds => {
+  const total = Math.max(0, Number(seconds) || 0)
+  const minutes = Math.floor(total / 60)
+  const wholeSeconds = Math.floor(total % 60)
+  return `${minutes}:${String(wholeSeconds).padStart(2, '0')}`
 }
 
-const trackLaneCount = track => Math.max(1, ...track.clips.map(clip => (clip.lane || 0) + 1))
+const isInteractiveTarget = target => Boolean(target.closest('button, input, select, textarea, a, video, label'))
 
-const trackRowStyle = track => ({
-  minHeight: `${trackLaneCount(track) * laneHeight}px`,
-})
+const clampZoom = value => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(value)))
 
-const trackLaneStyle = track => ({
-  minHeight: `${trackLaneCount(track) * laneHeight}px`,
-})
+const zoomAroundPoint = (nextZoom, clientX, clientY, canvasElement) => {
+  const previousScale = zoomScale.value
+  const nextScale = clampZoom(nextZoom) / 100
+  if (previousScale === nextScale) return
 
-const handleFileImport = event => {
-  importFiles(Array.from(event.target.files || []))
-  event.target.value = ''
+  const rect = canvasElement.getBoundingClientRect()
+  const pointerX = clientX - rect.left
+  const pointerY = clientY - rect.top
+  const graphX = (pointerX - canvasPan.x) / previousScale
+  const graphY = (pointerY - canvasPan.y) / previousScale
+
+  zoom.value = Math.round(nextScale * 100)
+  canvasPan.x = pointerX - graphX * nextScale
+  canvasPan.y = pointerY - graphY * nextScale
 }
 
-const handleMediaFileDrop = event => {
-  mediaDragOver.value = false
-  importFiles(Array.from(event.dataTransfer.files || []))
+const handleCanvasWheel = event => {
+  const direction = event.deltaY > 0 ? -1 : 1
+  zoomAroundPoint(zoom.value + direction * 8, event.clientX, event.clientY, event.currentTarget)
 }
 
-const importFiles = files => {
-  files.forEach(file => {
-    const type = mediaTypeFromFile(file)
-    const item = {
-      id: makeId('media'),
-      name: file.name,
-      type,
-      file,
-      url: URL.createObjectURL(file),
-      duration: type === 'image' ? 5 : 0,
-      color: mediaColor(type),
-    }
-    mediaItems.value.push(item)
-    readMediaDuration(item)
-
-    if (type === 'video' && !activeVideoSrc.value) {
-      activateVideoItem(item)
-      addToTimeline(item, 0)
-    }
-  })
-}
-
-const readMediaDuration = item => {
-  if (item.type === 'image') return
-  const element = document.createElement(item.type === 'audio' ? 'audio' : 'video')
-  element.preload = 'metadata'
-  element.src = item.url
-  element.onloadedmetadata = () => {
-    item.duration = Number.isFinite(element.duration) ? Math.max(0.1, element.duration) : 8
-    updateMediaDuration(item)
-    if (item.type === 'video' && activeVideoSrc.value === item.url) {
-      totalDuration.value = Math.max(1, item.duration)
-    }
-  }
-}
-
-const updateMediaDuration = item => {
-  tracks.value.forEach(track => {
-    track.clips.forEach(clip => {
-      if (clip.mediaId === item.id && clip.duration <= 5.001) {
-        clip.duration = Math.max(0.2, item.duration || clip.duration)
-      }
-    })
-  })
-  if (item.type === 'video') syncStoreMomentsFromTimeline()
-}
-
-const activateVideoItem = item => {
-  if (item.type !== 'video') return
-  activeVideoSrc.value = item.url
-  activeVideoFile.value = item.file
-  totalDuration.value = Math.max(1, item.duration || totalDuration.value)
-  store.setSelectedFile(item.file)
-  nextTick(applyVolume)
-}
-
-const onMediaDragStart = (event, item) => {
-  event.dataTransfer.setData('application/x-aicut-media', item.id)
-}
-
-const onCanvasDrop = event => {
-  const item = mediaItems.value.find(media => media.id === event.dataTransfer.getData('application/x-aicut-media'))
-  if (!item) return
-  if (item.type === 'video') activateVideoItem(item)
-  if (item.type === 'image') addSticker('IMG')
-  addToTimeline(item, currentTime.value)
-}
-
-const onTimelineDrop = event => {
-  const item = mediaItems.value.find(media => media.id === event.dataTransfer.getData('application/x-aicut-media'))
-  if (!item || !timelineRef.value) return
-  const rect = timelineRef.value.getBoundingClientRect()
-  const start = Math.max(0, (event.clientX - rect.left + timelineRef.value.scrollLeft - trackLabelWidth) / timelineZoom.value)
-  addToTimeline(item, start)
-}
-
-const addToTimeline = (item, start = currentTime.value) => {
-  if (item.type === 'video') activateVideoItem(item)
-  const track = trackForMediaType(item.type) || tracks.value[0]
-  if (track.locked) return
-  pushHistory()
-  const clip = {
-    id: makeId('clip'),
-    mediaId: item.id,
-    type: item.type,
-    name: item.name,
-    url: item.url,
-    start: snapTime(start),
-    duration: Math.max(0.2, item.duration || 5),
-    sourceStart: 0,
-    ...defaultClipProps(),
-  }
-  assignClipLane(track, clip)
-  track.clips.push(clip)
-  selectedTimelineClipId.value = clip.id
-  selectedElementId.value = ''
-}
-
-const addStockAudio = audio => {
-  const track = tracks.value.find(candidate => candidate.type === 'audio')
-  if (!track || track.locked) return
-  pushHistory()
-  const clip = {
-    id: makeId('clip'),
-    type: 'audio',
-    name: audio.name,
-    url: '',
-    start: snapTime(currentTime.value),
-    duration: audio.duration,
-    sourceStart: 0,
-    ...defaultClipProps(),
-  }
-  assignClipLane(track, clip)
-  track.clips.push(clip)
-  selectedTimelineClipId.value = clip.id
-  selectedElementId.value = ''
-}
-
-const addText = preset => {
-  const track = tracks.value.find(candidate => candidate.id === 'overlay')
-  if (!track || track.locked) return
-  pushHistory()
-  const element = {
-    id: makeId('text'),
-    type: 'text',
-    text: preset.label,
-    x: 50,
-    y: 50,
-    font: preset.font,
-    size: preset.size,
-    color: preset.color,
-    weight: preset.weight,
-  }
-  canvasElements.value.push(element)
-  const clip = {
-    id: makeId('clip'),
-    elementId: element.id,
-    type: 'text',
-    name: preset.name,
-    start: snapTime(currentTime.value),
-    duration: 4,
-    ...defaultClipProps(),
-  }
-  assignClipLane(track, clip)
-  track.clips.push(clip)
-  selectedElementId.value = element.id
-  selectedTimelineClipId.value = clip.id
-}
-
-const addSticker = sticker => {
-  const track = tracks.value.find(candidate => candidate.id === 'overlay')
-  if (!track || track.locked) return
-  pushHistory()
-  const element = {
-    id: makeId('sticker'),
-    type: 'sticker',
-    text: sticker,
-    x: 50,
-    y: 50,
-    font: 'Inter',
-    size: sticker.length > 2 ? 26 : 44,
-    color: '#ffffff',
-    weight: 800,
-  }
-  canvasElements.value.push(element)
-  const clip = {
-    id: makeId('clip'),
-    elementId: element.id,
-    type: 'text',
-    name: `Sticker ${sticker}`,
-    start: snapTime(currentTime.value),
-    duration: 3,
-    ...defaultClipProps(),
-  }
-  assignClipLane(track, clip)
-  track.clips.push(clip)
-  selectedElementId.value = element.id
-  selectedTimelineClipId.value = clip.id
-}
-
-const elementStyle = element => {
-  const clip = elementClipFor(element.id)
-  return {
-    left: `${element.x}%`,
-    top: `${element.y}%`,
-    fontFamily: element.font,
-    fontSize: `${element.size}px`,
-    color: element.color,
-    fontWeight: element.weight,
-    opacity: (clip?.opacity ?? 100) / 100,
-    transform: `translate(-50%, -50%) scale(${(clip?.scale ?? 100) / 100}) rotate(${clip?.rotation ?? 0}deg)`,
-    filter: clip ? [
-      `brightness(${100 + clip.brightness}%)`,
-      `contrast(${100 + clip.contrast}%)`,
-      `saturate(${100 + clip.saturation}%)`,
-      `hue-rotate(${clip.hue}deg)`,
-    ].join(' ') : undefined,
-  }
-}
-
-const selectCanvasElement = element => {
-  selectedElementId.value = element.id
-  const clip = elementClipFor(element.id)
-  selectedTimelineClipId.value = clip?.id || ''
-}
-
-const deleteCanvasElement = elementId => {
-  const clip = elementClipFor(elementId)
-  if (clip) selectedTimelineClipId.value = clip.id
-  selectedElementId.value = elementId
-  deleteSelected()
-}
-
-const startElementDrag = (event, element) => {
-  selectCanvasElement(element)
-  const startX = event.clientX
-  const startY = event.clientY
-  const startElementX = element.x
-  const startElementY = element.y
-  const rect = canvasRef.value.getBoundingClientRect()
-  let moved = false
-
-  const move = moveEvent => {
-    if (!moved) {
-      pushHistory()
-      moved = true
-    }
-    const dx = ((moveEvent.clientX - startX) / rect.width) * 100
-    const dy = ((moveEvent.clientY - startY) / rect.height) * 100
-    element.x = Math.max(0, Math.min(100, startElementX + dx))
-    element.y = Math.max(0, Math.min(100, startElementY + dy))
-  }
-  const up = () => {
-    window.removeEventListener('mousemove', move)
-    window.removeEventListener('mouseup', up)
-  }
-  window.addEventListener('mousemove', move)
-  window.addEventListener('mouseup', up)
-}
-
-const onVideoLoaded = () => {
-  const duration = Math.max(1, videoRef.value?.duration || totalDuration.value)
-  totalDuration.value = duration
-  const activeItem = mediaItems.value.find(item => item.url === activeVideoSrc.value)
-  if (activeItem) {
-    activeItem.duration = duration
-    updateMediaDuration(activeItem)
-  }
-  applyVolume()
-}
-
-const onTimeUpdate = () => {
-  currentTime.value = videoRef.value?.currentTime || 0
-}
-
-const togglePlay = async () => {
-  if (!videoRef.value) return
-  if (isPlaying.value) {
-    videoRef.value.pause()
-    isPlaying.value = false
-    return
-  }
-  await videoRef.value.play()
-  isPlaying.value = true
-}
-
-const seekTo = seconds => {
-  currentTime.value = Math.max(0, Math.min(timelineDuration.value, seconds))
-  if (videoRef.value) videoRef.value.currentTime = currentTime.value
-}
-
-const skip = seconds => seekTo(currentTime.value + seconds)
-
-const applyVolume = () => {
-  if (videoRef.value) videoRef.value.volume = volume.value
-}
-
-const toggleFullscreen = () => {
-  canvasRef.value?.requestFullscreen?.()
-}
-
-const cycleRatio = () => {
-  const ratios = ['16:9', '9:16', '1:1', '4:3', '21:9']
-  aspectRatio.value = ratios[(ratios.indexOf(aspectRatio.value) + 1) % ratios.length]
-  nextTick(fitPreview)
-}
-
-const fitPreview = () => {
-  if (!previewWrapRef.value) {
-    previewZoom.value = 100
-    return
-  }
-  const { width, height } = canvasBaseSize.value
-  const rect = previewWrapRef.value.getBoundingClientRect()
-  const availableWidth = Math.max(120, rect.width - 64)
-  const availableHeight = Math.max(120, rect.height - 64)
-  previewZoom.value = Math.max(25, Math.min(200, Math.floor(Math.min(availableWidth / width, availableHeight / height) * 100)))
-}
-
-const timelineClipStyle = clip => ({
-  left: `${clip.start * timelineZoom.value}px`,
-  width: `${Math.max(8, clip.duration * timelineZoom.value)}px`,
-  top: `${(clip.lane || 0) * laneHeight + 6}px`,
-  height: `${laneHeight - 12}px`,
-  opacity: clip.opacity / 100,
-})
-
-const seekFromTimeline = event => {
-  if (!timelineRef.value || event.target.closest('.timeline-clip') || event.target.closest('.track-label')) return
-  const rect = timelineRef.value.getBoundingClientRect()
-  seekTo((event.clientX - rect.left + timelineRef.value.scrollLeft - trackLabelWidth) / timelineZoom.value)
-}
-
-const startPlayheadDrag = () => {
-  const move = event => {
-    if (!timelineRef.value) return
-    const rect = timelineRef.value.getBoundingClientRect()
-    seekTo((event.clientX - rect.left + timelineRef.value.scrollLeft - trackLabelWidth) / timelineZoom.value)
-  }
-  const up = () => {
-    window.removeEventListener('mousemove', move)
-    window.removeEventListener('mouseup', up)
-  }
-  window.addEventListener('mousemove', move)
-  window.addEventListener('mouseup', up)
-}
-
-const startClipDrag = (event, track, clip, mode) => {
-  if (track.locked) return
-  selectedTimelineClipId.value = clip.id
-  selectedElementId.value = clip.elementId || ''
-  if (clip.type === 'video') store.selectClip(clip.id)
-  dragData.value = {
-    mode,
-    clip,
-    track,
+const startNodeDrag = (event, nodeId) => {
+  if (event.button !== 0 || isInteractiveTarget(event.target)) return
+  selectedNodeId.value = nodeId
+  const nodePosition = nodePositions[nodeId]
+  dragState.value = {
+    type: 'node',
+    nodeId,
+    pointerId: event.pointerId,
     startX: event.clientX,
-    startClipStart: clip.start,
-    startDuration: clip.duration,
-    historyPushed: false,
+    startY: event.clientY,
+    originX: nodePosition.x,
+    originY: nodePosition.y,
   }
-  window.addEventListener('mousemove', onTimelineMouseMove)
-  window.addEventListener('mouseup', stopTimelineDrag, { once: true })
+  event.currentTarget.setPointerCapture(event.pointerId)
+  window.addEventListener('pointermove', handlePointerMove)
+  window.addEventListener('pointerup', stopDrag)
+  window.addEventListener('pointercancel', stopDrag)
 }
 
-const onTimelineMouseMove = event => {
-  const data = dragData.value
-  if (!data) return
-  const delta = (event.clientX - data.startX) / timelineZoom.value
-  if (!data.historyPushed) {
-    pushHistory()
-    data.historyPushed = true
+const startCanvasPan = event => {
+  if (event.button !== 0 || event.target.closest('.graph-node') || isInteractiveTarget(event.target)) return
+  dragState.value = {
+    type: 'canvas',
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    originX: canvasPan.x,
+    originY: canvasPan.y,
   }
-  if (data.mode === 'move') {
-    data.clip.start = snapTime(Math.max(0, data.startClipStart + delta))
-  }
-  if (data.mode === 'resize-left') {
-    const newStart = snapTime(Math.max(0, data.startClipStart + delta))
-    const rightEdge = data.startClipStart + data.startDuration
-    data.clip.start = Math.min(newStart, rightEdge - 0.1)
-    data.clip.duration = Math.max(0.1, rightEdge - data.clip.start)
-    if (data.clip.type === 'video') syncStoreMomentsFromTimeline()
-  }
-  if (data.mode === 'resize-right') {
-    data.clip.duration = Math.max(0.1, snapTime(data.startDuration + delta))
-    if (data.clip.type === 'video') syncStoreMomentsFromTimeline()
-  }
+  event.currentTarget.setPointerCapture(event.pointerId)
+  window.addEventListener('pointermove', handlePointerMove)
+  window.addEventListener('pointerup', stopDrag)
+  window.addEventListener('pointercancel', stopDrag)
 }
 
-const stopTimelineDrag = () => {
-  if (dragData.value?.clip && dragData.value?.track) {
-    assignClipLane(dragData.value.track, dragData.value.clip, dragData.value.clip.lane || 0)
-  }
-  if (dragData.value?.clip?.type === 'video') syncStoreMomentsFromTimeline()
-  dragData.value = null
-  window.removeEventListener('mousemove', onTimelineMouseMove)
-}
+const handlePointerMove = event => {
+  const drag = dragState.value
+  if (!drag || event.pointerId !== drag.pointerId) return
+  const deltaX = event.clientX - drag.startX
+  const deltaY = event.clientY - drag.startY
 
-const splitAtPlayhead = () => {
-  if (!selectedTimelineClip.value) return
-  const clip = selectedTimelineClip.value
-  if (currentTime.value <= clip.start || currentTime.value >= clip.start + clip.duration) return
-  const track = tracks.value.find(candidate => candidate.clips.includes(clip))
-  pushHistory()
-  const leftDuration = currentTime.value - clip.start
-  const rightDuration = clip.duration - leftDuration
-  clip.duration = leftDuration
-  track.clips.push({
-    ...clip,
-    id: makeId('clip'),
-    start: currentTime.value,
-    duration: rightDuration,
-    sourceStart: (clip.sourceStart || 0) + leftDuration,
-  })
-  compactTrackLanes(track)
-  syncStoreMomentsFromTimeline()
-}
-
-const deleteSelected = () => {
-  const elementIdsToDelete = new Set()
-  if (selectedTimelineClip.value?.elementId) elementIdsToDelete.add(selectedTimelineClip.value.elementId)
-  if (!selectedTimelineClip.value && selectedElementId.value) elementIdsToDelete.add(selectedElementId.value)
-  if (!selectedTimelineClip.value && !elementIdsToDelete.size) return
-
-  pushHistory()
-  tracks.value.forEach(track => {
-    track.clips = track.clips.filter(clip => {
-      if (clip.id === selectedTimelineClipId.value) return false
-      if (elementIdsToDelete.has(clip.elementId)) return false
-      return true
-    })
-  })
-  if (elementIdsToDelete.size) {
-    canvasElements.value = canvasElements.value.filter(element => !elementIdsToDelete.has(element.id))
-  }
-  tracks.value.forEach(compactTrackLanes)
-  selectedTimelineClipId.value = ''
-  selectedElementId.value = ''
-  syncStoreMomentsFromTimeline()
-}
-
-const scrollTimeline = event => {
-  if (!timelineRef.value) return
-  timelineRef.value.scrollLeft += event.deltaY + event.deltaX
-}
-
-const syncStoreMomentsFromTimeline = () => {
-  const videoClips = tracks.value
-    .flatMap(track => track.clips)
-    .filter(clip => clip.type === 'video')
-    .sort((a, b) => a.start - b.start)
-  const previousMoments = new Map(store.moments.map(moment => [moment.id, moment]))
-
-  if (!videoClips.length) {
-    syncingTimelineToStore = true
-    store.moments = []
-    store.selectedClipId = ''
-    nextTick(() => { syncingTimelineToStore = false })
+  if (drag.type === 'canvas') {
+    canvasPan.x = drag.originX + deltaX
+    canvasPan.y = drag.originY + deltaY
     return
   }
-  syncingTimelineToStore = true
-  store.moments = videoClips.map((clip, index) => ({
-    ...(previousMoments.get(clip.id) || {}),
-    id: clip.id,
-    start: Number(clip.start.toFixed(3)),
-    end: Number((clip.start + clip.duration).toFixed(3)),
-    score: Number(previousMoments.get(clip.id)?.score ?? 1),
-    peak_score: Number(previousMoments.get(clip.id)?.peak_score ?? previousMoments.get(clip.id)?.score ?? 1),
-    reason: previousMoments.get(clip.id)?.reason || clip.name || `Clip ${index + 1}`,
-  }))
-  store.selectedClipId = selectedTimelineClipId.value || store.moments[0]?.id || ''
-  nextTick(() => { syncingTimelineToStore = false })
+
+  const nodePosition = nodePositions[drag.nodeId]
+  nodePosition.x = Math.round(drag.originX + deltaX / zoomScale.value)
+  nodePosition.y = Math.round(drag.originY + deltaY / zoomScale.value)
 }
 
-const selectMomentInsight = moment => {
-  store.selectClip(moment.id)
-  selectedTimelineClipId.value = moment.id
-  selectedElementId.value = ''
-  seekTo(moment.start)
+const stopDrag = event => {
+  const drag = dragState.value
+  if (!drag || event.pointerId !== drag.pointerId) return
+  dragState.value = null
+  window.removeEventListener('pointermove', handlePointerMove)
+  window.removeEventListener('pointerup', stopDrag)
+  window.removeEventListener('pointercancel', stopDrag)
 }
 
-const exportCurrentProject = async () => {
-  syncStoreMomentsFromTimeline()
-  await store.exportProject()
+const stopActiveDrag = () => {
+  dragState.value = null
+  window.removeEventListener('pointermove', handlePointerMove)
+  window.removeEventListener('pointerup', stopDrag)
+  window.removeEventListener('pointercancel', stopDrag)
 }
-
-const runAiTool = async toolId => {
-  if (toolId === 'smart-cut') {
-    await store.detectKeyMoments()
-    return
-  }
-  if (toolId === 'scene-detect') {
-    await analyzeScenes()
-    return
-  }
-  if (toolId === 'captions') {
-    await generateCaptions()
-    activeRightTab.value = 'captions'
-    return
-  }
-  store.status = 'complete'
-  store.statusMessage = 'This AI tool is ready for a backend endpoint.'
-  store.progress = 100
-}
-
-const analyzeScenes = async () => {
-  if (!activeVideoFile.value) return
-  store.status = 'processing'
-  store.statusMessage = 'Uploading video for scene detection'
-  store.progress = 4
-  const fd = new FormData()
-  fd.append('video', activeVideoFile.value)
-  const payload = await apiRequest('/analyze_scenes', { method: 'POST', body: fd })
-  const result = await waitForJob(payload.job_id)
-  const scenes = Array.isArray(result.scenes) ? result.scenes : []
-  store.status = 'complete'
-  store.statusMessage = `Detected ${scenes.length} scene(s).`
-  store.progress = 100
-}
-
-const generateCaptions = async () => {
-  if (!activeVideoFile.value) return
-  store.status = 'processing'
-  store.statusMessage = 'Uploading video for captions'
-  store.progress = 4
-  const fd = new FormData()
-  fd.append('video', activeVideoFile.value)
-  fd.append('device', store.whisperDevice)
-  fd.append('use_chunking', String(store.smartChunking))
-  const payload = await apiRequest('/generate_captions', { method: 'POST', body: fd })
-  const result = await waitForJob(payload.job_id)
-  captions.value = (Array.isArray(result.segments) ? result.segments : []).map((segment, index) => ({
-    id: `caption-${index}`,
-    start: Number(segment.start || 0),
-    end: Number(segment.end || 0),
-    text: String(segment.text || ''),
-  }))
-  store.status = 'complete'
-  store.statusMessage = `Generated ${captions.value.length} caption(s).`
-  store.progress = 100
-}
-
-const apiRequest = async (path, options) => {
-  const response = await fetch(`${API_BASE}${path}`, options)
-  const data = await response.json()
-  if (!response.ok) throw new Error(data.detail || data.error || 'Request failed.')
-  return data
-}
-
-const waitForJob = jobId => new Promise((resolve, reject) => {
-  const poll = async () => {
-    try {
-      const response = await fetch(`${API_BASE}/job_status/${jobId}`)
-      const job = await response.json()
-      if (!response.ok) throw new Error(job.detail || job.error || 'Status check failed.')
-      store.progress = Number(job.progress ?? store.progress)
-      store.statusMessage = job.message || store.statusMessage
-      if (job.state === 'complete') {
-        resolve(job.result || {})
-        return
-      }
-      if (job.state === 'error') {
-        reject(new Error(job.error || job.message || 'Processing failed.'))
-        return
-      }
-      window.setTimeout(poll, 500)
-    } catch (error) {
-      reject(error)
-    }
-  }
-  poll()
-})
-
-const snapTime = value => {
-  const safe = Math.max(0, Number(value) || 0)
-  return snapEnabled.value ? Math.round(safe * 10) / 10 : safe
-}
-
-const waveHeight = (seed, index, max = 28) => {
-  const code = String(seed).split('').reduce((sum, char) => sum + char.charCodeAt(0), 0)
-  return 4 + ((code * (index + 3) * 17) % max)
-}
-
-const formatTime = (seconds, withMillis = true) => {
-  const safe = Math.max(0, Number(seconds) || 0)
-  const minutes = Math.floor(safe / 60)
-  const wholeSeconds = Math.floor(safe % 60)
-  const millis = Math.round((safe - Math.floor(safe)) * 1000)
-  return withMillis
-    ? `${minutes}:${String(wholeSeconds).padStart(2, '0')}.${String(millis).padStart(3, '0')}`
-    : `${minutes}:${String(wholeSeconds).padStart(2, '0')}`
-}
-
-const rangesOverlap = (start, end, rangeStart, rangeEnd, padding = 1.25) => (
-  start - padding < rangeEnd && end + padding > rangeStart
-)
-
-const splitReasons = reason => {
-  const reasons = String(reason || '')
-    .split(',')
-    .map(item => item.trim())
-    .filter(Boolean)
-  return reasons.length ? reasons.slice(0, 6) : ['detected highlight']
-}
-
-const countNearbyIntervals = (items, start, end) => (Array.isArray(items) ? items : [])
-  .filter(item => rangesOverlap(start, end, Number(item.start || 0), Number(item.end ?? item.start ?? 0)))
-  .length
-
-const signalSummary = (key, label, items, start, end) => {
-  const count = countNearbyIntervals(items, start, end)
-  return { key, label, count, active: count > 0 }
-}
-
-const sceneSummary = (sceneChanges, start, end) => {
-  const count = (Array.isArray(sceneChanges) ? sceneChanges : [])
-    .filter(time => {
-      const seconds = Number(time)
-      return Number.isFinite(seconds) && seconds >= start - 1.25 && seconds <= end + 1.25
-    })
-    .length
-  return { key: 'scene', label: 'Scene', count, active: count > 0 }
-}
-
-const transcriptSnippet = (start, end) => {
-  const text = (store.transcriptSegments || [])
-    .filter(segment => rangesOverlap(
-      start,
-      end,
-      Number(segment.start || 0),
-      Number(segment.end ?? segment.start ?? 0),
-      0.75,
-    ))
-    .map(segment => String(segment.text || '').trim())
-    .filter(Boolean)
-    .join(' ')
-    .replace(/\s+/g, ' ')
-
-  if (!text) return 'No transcript text near this range.'
-  return text.length > 190 ? `${text.slice(0, 187).trim()}...` : text
-}
-
-const createHistorySnapshot = () => JSON.stringify({
-  tracks: tracks.value,
-  canvasElements: canvasElements.value,
-  selectedTimelineClipId: selectedTimelineClipId.value,
-  selectedElementId: selectedElementId.value,
-})
-
-const restoreHistorySnapshot = snapshot => {
-  const parsed = JSON.parse(snapshot)
-  if (Array.isArray(parsed)) {
-    tracks.value = parsed
-    tracks.value.forEach(compactTrackLanes)
-    canvasElements.value = []
-    selectedTimelineClipId.value = ''
-    selectedElementId.value = ''
-    return
-  }
-  tracks.value = parsed.tracks || tracks.value
-  tracks.value.forEach(compactTrackLanes)
-  canvasElements.value = parsed.canvasElements || []
-  selectedTimelineClipId.value = parsed.selectedTimelineClipId || ''
-  selectedElementId.value = parsed.selectedElementId || ''
-  syncStoreMomentsFromTimeline()
-}
-
-const pushHistory = () => {
-  history.value.push(createHistorySnapshot())
-  if (history.value.length > 30) history.value.shift()
-  future.value = []
-}
-
-const undo = () => {
-  const last = history.value.pop()
-  if (!last) return
-  future.value.push(createHistorySnapshot())
-  restoreHistorySnapshot(last)
-}
-
-const redo = () => {
-  const next = future.value.pop()
-  if (!next) return
-  history.value.push(createHistorySnapshot())
-  restoreHistorySnapshot(next)
-}
-
-const onKeyDown = event => {
-  const target = event.target
-  const isTyping = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable
-  if (isTyping) return
-  if (event.key === 'Delete' || event.key === 'Backspace') {
-    if (selectedTimelineClip.value || selectedElement.value) {
-      event.preventDefault()
-      deleteSelected()
-    }
-  }
-}
-
-watch(activeVideoClip, clip => {
-  if (videoRef.value) videoRef.value.playbackRate = clip?.speed || 1
-}, { deep: true })
-
-watch(selectedTimelineClip, clip => {
-  if (clip?.type === 'video') store.selectClip(clip.id)
-})
-
-watch(() => store.moments, moments => {
-  if (syncingTimelineToStore) return
-  if (!Array.isArray(moments) || !moments.length || !activeVideoSrc.value) return
-  pushHistory()
-  const videoTrack = tracks.value.find(track => track.type === 'video')
-  videoTrack.clips = moments.map((moment, index) => ({
-    id: moment.id || makeId('clip'),
-    type: 'video',
-    name: `AI Moment ${index + 1}`,
-    url: activeVideoSrc.value,
-    start: Number(moment.start || 0),
-    duration: Math.max(0.1, Number(moment.end || 0) - Number(moment.start || 0)),
-    sourceStart: Number(moment.start || 0),
-    lane: 0,
-    ...defaultClipProps(),
-  }))
-  selectedTimelineClipId.value = videoTrack.clips[0]?.id || ''
-}, { deep: true })
 
 onMounted(() => {
   store.loadWhisperCapabilities()
-  nextTick(fitPreview)
-  window.addEventListener('keydown', onKeyDown)
-  if (window.ResizeObserver && previewWrapRef.value) {
-    previewResizeObserver = new ResizeObserver(() => fitPreview())
-    previewResizeObserver.observe(previewWrapRef.value)
-  }
 })
 
-onBeforeUnmount(() => {
-  window.removeEventListener('mousemove', onTimelineMouseMove)
-  window.removeEventListener('keydown', onKeyDown)
-  previewResizeObserver?.disconnect()
-})
+onBeforeUnmount(stopActiveDrag)
 </script>
 
 <style scoped>
-:global(*) {
-  box-sizing: border-box;
+.node-studio-shell {
+  min-height: 100vh;
+  overflow: hidden;
+  color: #f4f7fa;
+  background:
+    radial-gradient(circle at 50% -10%, rgba(34, 211, 238, 0.12), transparent 32%),
+    radial-gradient(circle at 90% 10%, rgba(124, 58, 237, 0.12), transparent 28%),
+    #050505;
+  font-family: Geist, Inter, ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: -0.015em;
 }
 
-:global(body) {
-  margin: 0;
-  background: #0b0b0d;
-  color: #ececf1;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+.node-topbar {
+  height: 72px;
+  display: grid;
+  grid-template-columns: 340px 1fr 340px;
+  align-items: center;
+  gap: 18px;
+  padding: 0 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(10, 10, 10, 0.72);
+  backdrop-filter: blur(28px);
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.38);
 }
 
-button,
-input {
+.brand-stack,
+.brand-link,
+.topbar-actions,
+.graph-toolbar {
+  display: flex;
+  align-items: center;
+}
+
+.brand-stack { gap: 16px; min-width: 0; }
+.brand-link { gap: 10px; color: inherit; text-decoration: none; }
+.brand-link span:last-child { display: grid; gap: 1px; }
+.brand-link strong { font-size: 14px; font-weight: 700; }
+.brand-link small { color: #8a8f98; font-size: 11px; }
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  color: #001317;
+  background: linear-gradient(135deg, #67e8f9, #2dd4bf);
+  box-shadow: 0 0 28px rgba(34, 211, 238, 0.38);
+  font-weight: 900;
+}
+
+.project-input {
+  min-width: 0;
+  width: 150px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: #e4e7ec;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+}
+.project-input:focus { outline: none; border-color: rgba(34, 211, 238, 0.35); background: rgba(255, 255, 255, 0.045); }
+
+.graph-toolbar {
+  justify-self: center;
+  gap: 7px;
+  padding: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.045);
+  backdrop-filter: blur(24px);
+}
+
+.tool-chip,
+.icon-control,
+.export-button,
+.analysis-button,
+.node-action,
+.download-link {
+  border: 0;
+  cursor: pointer;
   font: inherit;
 }
 
-button {
-  cursor: pointer;
-}
-
-button:disabled {
-  cursor: not-allowed;
-}
-
-.capcut-shell {
-  height: 100vh;
-  display: grid;
-  grid-template-rows: 48px minmax(0, 1fr) 250px;
-  background: #0b0b0d;
-  color: #ececf1;
-  overflow: hidden;
-}
-
-.topbar {
-  display: grid;
-  grid-template-columns: minmax(240px, 1fr) auto minmax(240px, 1fr);
-  align-items: center;
-  gap: 14px;
-  padding: 0 14px;
-  background: #101013;
-  border-bottom: 1px solid #24242a;
-}
-
-.top-left,
-.top-center,
-.top-right {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.top-center {
-  justify-content: center;
-}
-
-.top-right {
-  justify-content: flex-end;
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 800;
-}
-
-.brand-mark {
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  background: linear-gradient(135deg, #00e5ff, #e8ff47);
-}
-
-.project-name {
-  width: min(260px, 40vw);
-  border: 1px solid transparent;
-  border-radius: 7px;
-  padding: 6px 8px;
+.tool-chip,
+.icon-control {
+  border-radius: 999px;
   background: transparent;
-  color: #dcdce2;
-  outline: none;
+  color: #9ca3af;
+  padding: 7px 11px;
+  transition: 160ms ease;
 }
-
-.project-name:focus {
-  border-color: #30323a;
-  background: #17181d;
+.tool-chip.active,
+.tool-chip:hover,
+.icon-control:hover {
+  color: #f4f7fa;
+  background: rgba(255, 255, 255, 0.08);
 }
+.toolbar-divider { width: 1px; height: 20px; background: rgba(255, 255, 255, 0.1); }
+.zoom-readout { min-width: 46px; color: #a1a1aa; text-align: center; font-size: 12px; }
+.topbar-actions { justify-self: end; gap: 12px; min-width: 0; }
+.job-status { max-width: 190px; color: #8a8f98; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.job-status.error { color: #fca5a5; }
+.job-status.processing { color: #67e8f9; }
 
-.icon-btn,
-.tool-btn,
-.playback-btn,
-.timeline-btn,
-.ratio-chip {
-  border: 1px solid #2b2c33;
-  border-radius: 7px;
-  background: #18191e;
-  color: #b8bac3;
-  min-height: 30px;
-  padding: 0 10px;
+.export-button,
+.analysis-button,
+.node-action,
+.download-link {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  border-radius: 13px;
+  background: rgba(34, 211, 238, 0.92);
+  color: #001317;
+  font-weight: 750;
+  letter-spacing: -0.025em;
+  box-shadow: 0 0 28px rgba(34, 211, 238, 0.28);
+  transition: 180ms ease;
 }
+.export-button { padding: 10px 16px; }
+.export-button:hover,
+.analysis-button:hover,
+.node-action:hover,
+.download-link:hover { transform: translateY(-1px); background: #67e8f9; box-shadow: 0 0 46px rgba(34, 211, 238, 0.38); }
+.export-button:disabled,
+.analysis-button:disabled,
+.node-action:disabled { cursor: not-allowed; opacity: 0.45; transform: none; }
 
-.icon-btn {
-  width: 32px;
-  padding: 0;
-}
-
-.icon-btn.active,
-.playback-btn.active {
-  border-color: #00c9d8;
-  color: #00e5ff;
-}
-
-.icon-btn:not(:disabled):hover,
-.tool-btn:not(:disabled):hover,
-.playback-btn:not(:disabled):hover,
-.timeline-btn:not(:disabled):hover,
-.ratio-chip:not(:disabled):hover {
-  border-color: #48505c;
-  background: #22242b;
-  color: #f2f5f8;
-}
-
-.icon-btn:focus-visible,
-.tool-btn:focus-visible,
-.playback-btn:focus-visible,
-.timeline-btn:focus-visible,
-.ratio-chip:focus-visible,
-.export-btn:focus-visible,
-.left-tab:focus-visible,
-.media-drop:focus-visible,
-.media-card:focus-visible,
-.fx-tile:focus-visible,
-.preset-card:focus-visible,
-.audio-row:focus-visible,
-.sticker:focus-visible,
-.ai-tool:focus-visible,
-.caption-row:focus-visible,
-.insight-card:focus-visible,
-.right-tabs button:focus-visible,
-.track-label button:focus-visible,
-.play-main:focus-visible,
-.element-delete:focus-visible {
-  outline: 2px solid #00c9d8;
-  outline-offset: 2px;
-}
-
-.divider {
-  width: 1px;
-  height: 22px;
-  background: #2a2b31;
-}
-
-.ratio-chip {
-  color: #e8ff47;
-}
-
-.autosave {
-  min-width: 0;
-  max-width: 280px;
-  overflow: hidden;
-  color: #7b7d86;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-}
-
-.export-btn {
-  min-height: 34px;
-  border: 0;
-  border-radius: 8px;
-  padding: 0 18px;
-  background: #00c9d8;
-  color: #081214;
-  font-weight: 900;
-}
-
-.export-btn:disabled {
-  opacity: 0.45;
-}
-
-.export-btn:not(:disabled):hover,
-.play-main:hover,
-.caption-generate:not(:disabled):hover {
-  filter: brightness(1.08);
-}
-
-.editor-body {
-  min-height: 0;
+.node-layout {
+  height: calc(100vh - 72px);
   display: grid;
-  grid-template-columns: 310px minmax(0, 1fr) 300px;
-  background: #0f1012;
+  grid-template-columns: 292px 1fr 320px;
+  gap: 16px;
+  padding: 16px;
 }
 
-.left-panel,
-.right-panel {
+.glass-panel {
   min-height: 0;
-  display: flex;
-  background: #141519;
-  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 24px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.035));
+  backdrop-filter: blur(30px);
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.48);
 }
-
-.left-panel {
-  border-right: 1px solid #24252b;
-}
-
-.right-panel {
-  flex-direction: column;
-  border-left: 1px solid #24252b;
-}
-
-.left-tabs {
-  width: 76px;
-  padding: 10px 8px;
+.asset-panel,
+.properties-panel {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  background: #111216;
-  border-right: 1px solid #24252b;
+  gap: 14px;
+  padding: 16px;
+  overflow: auto;
 }
 
-.left-tab {
+.panel-section-title { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.panel-section-title span { font-size: 13px; font-weight: 750; color: #f4f7fa; }
+.panel-section-title small { color: #71717a; font-size: 11px; }
+.panel-section-title.compact { margin-top: 6px; }
+
+.upload-zone {
+  position: relative;
+  min-height: 158px;
   display: grid;
   place-items: center;
-  gap: 4px;
-  min-height: 58px;
-  border: 0;
-  border-radius: 9px;
-  background: transparent;
-  color: #8d909a;
-  font-size: 11px;
+  align-content: center;
+  gap: 7px;
+  overflow: hidden;
+  border: 1px dashed rgba(255, 255, 255, 0.14);
+  border-radius: 22px;
+  background: rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+  text-align: center;
+}
+.upload-zone input { display: none; }
+.upload-zone strong { max-width: 210px; color: #f4f7fa; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upload-zone small { color: #8a8f98; font-size: 12px; }
+.upload-zone.has-file { border-color: rgba(34, 211, 238, 0.42); box-shadow: inset 0 0 30px rgba(34, 211, 238, 0.06); }
+.upload-orb {
+  width: 44px;
+  height: 44px;
+  border-radius: 18px;
+  background: radial-gradient(circle, rgba(103, 232, 249, 0.88), rgba(34, 211, 238, 0.18) 60%, transparent);
+  box-shadow: 0 0 44px rgba(34, 211, 238, 0.32);
 }
 
-.left-tab.active {
-  background: #1b2730;
-  color: #00e5ff;
+.node-palette { display: grid; gap: 9px; }
+.palette-card {
+  display: flex;
+  gap: 11px;
+  align-items: center;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: 160ms ease;
 }
+.palette-card:hover { border-color: rgba(34, 211, 238, 0.28); background: rgba(255, 255, 255, 0.065); transform: translateY(-1px); }
+.palette-card span:last-child { display: grid; gap: 2px; }
+.palette-card strong { font-size: 13px; }
+.palette-card small { color: #8a8f98; font-size: 11px; }
+.palette-icon { width: 12px; height: 30px; border-radius: 999px; box-shadow: 0 0 24px currentColor; }
+.palette-icon.cyan { color: #22d3ee; background: #22d3ee; }
+.palette-icon.violet { color: #8b5cf6; background: #8b5cf6; }
+.palette-icon.teal { color: #2dd4bf; background: #2dd4bf; }
+.palette-icon.amber { color: #fbbf24; background: #fbbf24; }
+.analysis-button { width: 100%; margin-top: auto; padding: 12px 14px; }
 
-.left-tab:hover {
-  background: #191b21;
-  color: #d7dae1;
+.graph-canvas-wrap {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 28px;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    radial-gradient(circle at center, rgba(34, 211, 238, 0.045), transparent 48%),
+    #070707;
+  background-size: 36px 36px, 36px 36px, auto, auto;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), inset 0 0 70px rgba(0,0,0,0.72);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
 }
-
-.left-tab.active:hover {
-  background: #21313d;
-  color: #00e5ff;
+.graph-canvas-wrap.is-panning { cursor: grabbing; }
+.graph-canvas-wrap.is-panning .graph-canvas { transition: none; }
+.canvas-glow { position: absolute; width: 280px; height: 280px; border-radius: 999px; filter: blur(60px); opacity: 0.18; pointer-events: none; }
+.canvas-glow.cyan { left: 10%; top: 8%; background: #22d3ee; }
+.canvas-glow.violet { right: 8%; bottom: 12%; background: #8b5cf6; }
+.graph-canvas {
+  position: relative;
+  width: 1240px;
+  height: 720px;
+  transform-origin: top left;
+  transition: transform 160ms ease;
 }
+.connection-layer { position: absolute; inset: 0; width: 1240px; height: 720px; pointer-events: none; }
+.edge-path { fill: none; stroke: rgba(255, 255, 255, 0.16); stroke-width: 2; stroke-dasharray: 7 8; }
+.edge-path.active { stroke: rgba(34, 211, 238, 0.76); filter: drop-shadow(0 0 10px rgba(34, 211, 238, 0.42)); stroke-dasharray: none; }
 
-.tab-icon {
-  width: 20px;
-  height: 20px;
+.graph-node {
+  position: absolute;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 22px;
+  background: rgba(14, 14, 15, 0.82);
+  backdrop-filter: blur(28px);
+  box-shadow: 0 24px 80px rgba(0,0,0,0.55);
+  cursor: grab;
+  touch-action: none;
+  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
 }
-
-.tab-icon :deep(svg),
-.tab-icon svg {
-  width: 20px;
-  height: 20px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
+.graph-node:active { cursor: grabbing; }
+.graph-node:hover,
+.graph-node.selected { border-color: rgba(34, 211, 238, 0.52); box-shadow: 0 24px 80px rgba(0,0,0,0.55), 0 0 34px rgba(34, 211, 238, 0.22); transform: translateY(-2px); }
+.graph-node.dragging,
+.graph-node.dragging:hover {
+  z-index: 3;
+  cursor: grabbing;
+  transform: none;
+  transition: none;
 }
-
-.left-content,
-.right-content {
-  min-width: 0;
-  flex: 1;
-  overflow-y: auto;
-  scrollbar-color: #3a3b42 #17181d;
-  scrollbar-width: thin;
+.node-head {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 15px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.025));
 }
+.node-head div { display: grid; gap: 2px; }
+.node-head small { color: #67e8f9; font-size: 10px; font-weight: 800; letter-spacing: 0.12em; }
+.node-head strong { font-size: 15px; }
+.node-port { width: 12px; height: 12px; border: 2px solid #050505; border-radius: 999px; background: #22d3ee; box-shadow: 0 0 16px rgba(34, 211, 238, 0.65); }
+.node-port.input { margin-left: -21px; }
+.node-port.output { margin-right: -21px; }
+.node-body { padding: 14px 15px 16px; }
+.node-body p { margin: 0 0 12px; color: #a1a1aa; font-size: 12px; line-height: 1.5; }
 
-.panel-page {
+.video-preview-card {
+  overflow: hidden;
+  height: 145px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 16px;
+  background: #050505;
+}
+.video-preview-card video { width: 100%; height: 100%; object-fit: cover; }
+.preview-placeholder { height: 100%; display: grid; place-items: center; color: #71717a; font-size: 12px; background: radial-gradient(circle, rgba(34,211,238,0.08), transparent 55%); }
+
+.signal-stack { display: grid; gap: 8px; }
+.signal-stack span { position: relative; height: 28px; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,0.055); }
+.signal-stack i { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: linear-gradient(90deg, rgba(34,211,238,0.38), rgba(45,212,191,0.82)); box-shadow: 0 0 18px rgba(34,211,238,0.3); }
+.signal-stack em { position: relative; z-index: 1; display: flex; align-items: center; height: 100%; padding-left: 11px; color: #e4e7ec; font-size: 11px; font-style: normal; }
+
+.clip-node-list { display: grid; gap: 7px; }
+.clip-node-list button {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 13px;
+  background: rgba(255,255,255,0.045);
+  color: #e4e7ec;
+  padding: 10px 11px;
+  font: inherit;
+  cursor: pointer;
+}
+.clip-node-list button.active { border-color: rgba(34,211,238,0.66); background: rgba(34,211,238,0.12); box-shadow: 0 0 24px rgba(34,211,238,0.22); }
+.clip-node-list span { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
+.clip-node-list strong { color: #67e8f9; font-size: 12px; }
+.empty-node-copy { color: #71717a; font-size: 12px; }
+
+.export-node-body { display: grid; gap: 12px; }
+.export-stat { display: flex; align-items: baseline; gap: 8px; }
+.export-stat strong { font-size: 36px; line-height: 1; color: #67e8f9; text-shadow: 0 0 22px rgba(34,211,238,0.4); }
+.export-stat span { color: #8a8f98; font-size: 12px; }
+.node-action,
+.download-link { padding: 10px 13px; text-decoration: none; }
+
+.inspector-card {
   display: grid;
   gap: 12px;
   padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  background: rgba(0, 0, 0, 0.22);
 }
-
-.panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  color: #f0f0f4;
-}
-
-.mini-action {
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
-  padding: 0 10px;
-  border-radius: 999px;
-  background: #1e2a35;
-  color: #58dce8;
-  font-size: 12px;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.mini-action:hover {
-  background: #263746;
-  color: #9af4ff;
-}
-
-.mini-action input {
-  display: none;
-}
-
-.media-drop {
-  display: grid;
-  place-items: center;
-  min-height: 66px;
-  border: 1px dashed #30323a;
-  border-radius: 9px;
-  background: #111216;
-  color: #747782;
-  font-size: 12px;
-  cursor: pointer;
-  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
-}
-
-.media-drop.over,
-.media-drop:hover {
-  border-color: #00c9d8;
-  background: #132027;
-  color: #00e5ff;
-}
-
-.media-grid,
-.tile-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.media-card,
-.fx-tile,
-.preset-card,
-.audio-row,
-.sticker,
-.ai-tool,
-.caption-row {
-  border: 1px solid #24252b;
-  border-radius: 9px;
-  background: #191a1f;
-  color: #d8d9df;
-  text-align: left;
-  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease, color 140ms ease;
-}
-
-.media-card:hover,
-.fx-tile:hover,
-.preset-card:hover,
-.audio-row:hover,
-.sticker:hover,
-.ai-tool:not(:disabled):hover,
-.caption-row:hover {
-  border-color: #3f4650;
-  background: #202229;
-  color: #f4f6fa;
-  transform: translateY(-1px);
-}
-
-.media-card {
-  padding: 0;
-  overflow: hidden;
-}
-
-.media-thumb {
-  position: relative;
-  display: grid;
-  place-items: center;
-  height: 72px;
-}
-
-.media-type {
-  text-transform: uppercase;
-  font-size: 11px;
-  font-weight: 900;
-}
-
-.media-duration {
-  position: absolute;
-  right: 6px;
-  bottom: 5px;
-  padding: 2px 5px;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.55);
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 10px;
-}
-
-.media-name {
-  display: block;
-  padding: 7px 8px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-}
-
-.empty-panel,
-.no-selection {
-  grid-column: 1 / -1;
-  display: grid;
-  gap: 6px;
-  place-items: center;
-  min-height: 130px;
-  padding: 20px;
-  color: #6f727c;
-  text-align: center;
-}
-
-.empty-panel p,
-.no-selection p {
-  margin: 0;
-  font-size: 12px;
-}
-
-.preset-card {
-  display: grid;
-  gap: 4px;
-  padding: 13px;
-}
-
-.preset-card small,
-.audio-row small,
-.ai-tool small {
-  display: block;
-  color: #70737d;
-  font-size: 11px;
-}
-
-.audio-row {
-  display: grid;
-  grid-template-columns: 66px 1fr;
-  align-items: center;
-  gap: 10px;
+.inspector-card label { display: grid; gap: 7px; color: #8a8f98; font-size: 12px; }
+.inspector-card select,
+.inspector-card input[type='number'] {
+  width: 100%;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.055);
+  color: #f4f7fa;
   padding: 10px;
 }
-
-.mini-wave,
-.waveform {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.mini-wave i,
-.waveform i {
-  width: 2px;
-  border-radius: 2px;
-  background: #8f5cff;
-}
-
-.fx-tile {
-  padding: 0;
-  overflow: hidden;
-}
-
-.fx-tile span {
-  display: grid;
-  place-items: center;
-  height: 60px;
-  color: rgba(255, 255, 255, 0.7);
-  font-weight: 900;
-}
-
-.fx-tile strong {
-  display: block;
-  padding: 7px 8px;
-  font-size: 11px;
-}
-
-.fx-tile.active {
-  border-color: #00c9d8;
-}
-
-.sticker-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-}
-
-.sticker {
-  display: grid;
-  place-items: center;
-  aspect-ratio: 1;
-  font-size: 22px;
-}
-
-.preview-area {
-  min-width: 0;
-  min-height: 0;
-  display: grid;
-  grid-template-rows: 42px minmax(0, 1fr) 56px;
-  background: #0c0d10;
-}
-
-.preview-toolbar,
-.playback-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 14px;
-  background: #15161a;
-  border-bottom: 1px solid #24252b;
-}
-
-.playback-bar {
-  border-top: 1px solid #24252b;
-  border-bottom: 0;
-  position: relative;
-  justify-content: center;
-}
-
-.zoom-control {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
-  border-radius: 7px;
-  background: #1d1e24;
-  color: #9ea1aa;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 12px;
-}
-
-.zoom-control button {
-  border: 0;
-  background: transparent;
-  color: #d7d9df;
-}
-
-.zoom-control button:hover {
-  color: #fff;
-}
-
-.time-readout {
-  margin-left: auto;
-  color: #787b84;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 12px;
-}
-
-.canvas-wrap {
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 32px;
-  overflow: hidden;
-  background: radial-gradient(circle at center, #18191d, #090a0c);
-}
-
-.canvas-stage {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  min-height: 0;
-  width: 100%;
-  height: 100%;
-}
-
-.canvas-frame {
-  position: relative;
-  flex: 0 0 auto;
-  transition: width 160ms ease, height 160ms ease;
-}
-
-.canvas-inner {
-  position: relative;
-  overflow: hidden;
-  background: #000;
-  transform-origin: top left;
-  will-change: transform;
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.72), 0 0 0 1px #292a31;
-}
-
-.frame-guide {
-  position: absolute;
-  inset: -1px;
-  z-index: 8;
-  border: 1px solid rgba(232, 255, 71, 0.78);
-  box-shadow: 0 0 0 1px rgba(0, 229, 255, 0.22), 0 0 24px rgba(0, 0, 0, 0.4);
-  pointer-events: none;
-}
-
-.frame-badge {
-  position: absolute;
-  left: 50%;
-  top: -28px;
-  z-index: 9;
-  transform: translateX(-50%);
-  padding: 4px 8px;
-  border: 1px solid #31343d;
-  border-radius: 6px;
-  background: #101115;
-  color: #e8ff47;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 11px;
-  font-weight: 900;
-  pointer-events: none;
-}
-
-.preview-video {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  display: block;
-  transform-origin: center;
-}
-
-.canvas-placeholder {
-  width: 100%;
-  height: 100%;
-  display: grid;
-  place-content: center;
-  gap: 8px;
-  color: #444852;
-  text-align: center;
-}
-
-.canvas-element {
-  position: absolute;
-  z-index: 4;
-  padding: 4px 7px;
-  border-radius: 5px;
-  border: 1px solid transparent;
-  white-space: nowrap;
-  cursor: move;
-  user-select: none;
-}
-
-.canvas-element:hover {
-  border-color: rgba(0, 201, 216, 0.55);
-}
-
-.canvas-element.selected {
-  border-color: #00c9d8;
-}
-
-.element-outline {
-  position: absolute;
-  inset: -7px;
-  border: 1px dashed #00c9d8;
-  pointer-events: none;
-}
-
-.element-delete {
-  position: absolute;
-  top: -19px;
-  right: -19px;
-  z-index: 2;
-  width: 20px;
-  height: 20px;
-  border: 1px solid #3d414b;
-  border-radius: 999px;
-  background: #f3f4f8;
-  color: #111216;
-  font-size: 11px;
-  font-weight: 900;
-  line-height: 18px;
-  padding: 0;
-}
-
-.element-delete:hover {
-  background: #ff5b6e;
-  border-color: #ff5b6e;
-  color: #fff;
-}
-
-.play-main {
-  min-width: 74px;
-  min-height: 36px;
-  border: 0;
-  border-radius: 999px;
-  background: #f3f4f8;
-  color: #111216;
-  font-weight: 900;
-}
-
-.volume-control {
-  position: absolute;
-  right: 126px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #858893;
-  font-size: 12px;
-}
-
-.playback-bar > .playback-btn:nth-of-type(4) {
-  position: absolute;
-  right: 66px;
-}
-
-.playback-bar > .playback-btn:nth-of-type(5) {
-  position: absolute;
-  right: 14px;
-}
-
-.volume-control input {
-  width: 92px;
-}
-
-.right-tabs {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  border-bottom: 1px solid #24252b;
-}
-
-.right-tabs button {
-  min-height: 42px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: #777a84;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.right-tabs button.active {
-  border-bottom-color: #00c9d8;
-  color: #00e5ff;
-}
-
-.right-tabs button:hover {
-  background: #191b21;
-  color: #d7dae1;
-}
-
-.prop-panel,
-.ai-panel,
-.caption-panel,
-.explain-panel {
-  display: grid;
-  gap: 14px;
-  padding: 14px;
-}
-
-.prop-title {
-  padding-bottom: 10px;
-  border-bottom: 1px solid #25262d;
-  color: #f2f3f8;
-  font-weight: 900;
-}
-
-.prop-subtitle {
-  color: #8b8e97;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-size: 11px;
-  font-weight: 900;
-}
-
-.prop-row {
-  display: grid;
-  grid-template-columns: 82px 1fr 42px;
-  align-items: center;
-  gap: 8px;
-  color: #9da0a9;
-  font-size: 12px;
-}
-
-.prop-row input {
-  width: 100%;
-  accent-color: #00c9d8;
-}
-
-.prop-row em {
-  color: #777a84;
-  font-style: normal;
-  text-align: right;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 11px;
-}
-
-.ai-tool {
-  display: grid;
-  grid-template-columns: 34px 1fr;
-  align-items: center;
-  gap: 10px;
-  padding: 11px;
-}
-
-.ai-tool > span:first-child {
-  display: grid;
-  place-items: center;
-  min-height: 34px;
-  border-radius: 8px;
-  background: #1d2933;
-  color: #00e5ff;
-  font-weight: 900;
-}
-
-.ai-status {
-  display: grid;
-  gap: 7px;
-  color: #8b8e97;
-  font-size: 12px;
-}
-
-.ai-progress {
-  height: 5px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: #26272e;
-}
-
-.ai-progress span {
-  display: block;
-  height: 100%;
-  background: linear-gradient(90deg, #00c9d8, #e8ff47);
-}
-
-.caption-generate {
-  min-height: 36px;
-  border: 0;
-  border-radius: 8px;
-  background: #1d2933;
-  color: #00e5ff;
-  font-weight: 900;
-}
-
-.caption-generate:disabled {
-  opacity: 0.45;
-}
-
-.caption-list {
-  display: grid;
-  gap: 7px;
-}
-
-.caption-row {
-  display: grid;
-  grid-template-columns: 58px 1fr;
-  gap: 8px;
-  padding: 9px;
-}
-
-.caption-row.active {
-  border-color: #00c9d8;
-}
-
-.caption-row span {
-  color: #777a84;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 11px;
-}
-
-.caption-row strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-}
-
-.insight-list {
-  display: grid;
-  gap: 10px;
-}
-
-.insight-overview {
-  display: grid;
-  gap: 5px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid #25262d;
-}
-
-.insight-overview strong {
-  color: #f2f3f8;
-  font-size: 14px;
-}
-
-.insight-overview small {
-  color: #81848d;
-  line-height: 1.4;
-}
-
-.insight-card {
-  display: grid;
-  gap: 9px;
-  width: 100%;
-  padding: 11px;
-  border: 1px solid #24252b;
-  border-radius: 8px;
-  background: #191a1f;
-  color: #d8d9df;
-  text-align: left;
-}
-
-.insight-card:hover,
-.insight-card.active {
-  border-color: #3f4650;
-  background: #202229;
-}
-
-.insight-card.active {
-  box-shadow: inset 3px 0 0 #e8ff47;
-}
-
-.insight-topline,
-.signal-row,
-.reason-chips {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.insight-topline {
-  justify-content: space-between;
-}
-
-.insight-topline strong {
-  min-width: 0;
-  overflow: hidden;
-  color: #f2f3f8;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-}
-
-.insight-topline em {
-  display: grid;
-  place-items: center;
-  min-width: 34px;
-  min-height: 22px;
-  border-radius: 999px;
-  background: #e8ff47;
-  color: #111216;
-  font-style: normal;
-  font-size: 11px;
-  font-weight: 900;
-}
-
-.score-meter {
-  height: 5px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: #2a2b31;
-}
-
-.score-meter i {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, #00c9d8, #e8ff47);
-}
-
-.reason-chips,
-.signal-row {
-  flex-wrap: wrap;
-}
-
-.reason-chips span,
-.signal-row span {
-  max-width: 100%;
-  overflow: hidden;
-  border-radius: 999px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 10px;
-  font-weight: 800;
-}
-
-.reason-chips span {
-  padding: 3px 7px;
-  background: #1d2933;
-  color: #86eff9;
-}
-
-.signal-row span {
-  padding: 2px 6px;
-  border: 1px solid #30323a;
-  color: #6f727c;
-}
-
-.signal-row span.active {
-  border-color: #3d4a2a;
-  color: #e8ff47;
-}
-
-.transcript-snippet {
-  color: #a3a6af;
-  line-height: 1.45;
-  font-size: 12px;
-}
-
-.timeline-section {
-  min-height: 0;
-  display: grid;
-  grid-template-rows: 42px minmax(0, 1fr);
-  background: #141519;
-  border-top: 1px solid #24252b;
-}
-
-.timeline-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px;
-  border-bottom: 1px solid #24252b;
-}
-
-.timeline-btn:disabled {
-  opacity: 0.4;
-}
-
-.timeline-zoom {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #858893;
-  font-size: 12px;
-}
-
-.timeline-duration {
-  margin-left: auto;
-  color: #666a74;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 12px;
-}
-
-.timeline-body {
-  position: relative;
-  min-height: 0;
-  overflow: auto;
-  scrollbar-color: #3b3c43 #17181d;
-  scrollbar-width: thin;
-}
-
-.timeline-ruler {
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  height: 28px;
-  background: #101115;
-  border-bottom: 1px solid #24252b;
-}
-
-.ruler-tick {
-  position: absolute;
-  bottom: 0;
-  width: 1px;
-  height: 9px;
-  background: #3b3c43;
-}
-
-.ruler-tick em {
-  position: absolute;
-  left: 5px;
-  top: -14px;
-  color: #666a74;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 10px;
-  font-style: normal;
-}
-
-.playhead {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  z-index: 20;
-  width: 1px;
-  background: #00e5ff;
-  cursor: col-resize;
-}
-
-.playhead span {
-  position: absolute;
-  left: -6px;
-  top: 1px;
-  width: 12px;
-  height: 12px;
-  background: #00e5ff;
-  clip-path: polygon(50% 100%, 0 0, 100% 0);
-}
-
-.tracks {
-  display: grid;
-  gap: 2px;
-  padding: 6px 0 20px;
-}
-
-.track-row {
-  display: grid;
-  grid-template-columns: 150px minmax(0, 1fr);
-}
-
-.track-label {
-  position: sticky;
-  left: 0;
-  z-index: 4;
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  padding: 11px 8px 0;
-  background: #141519;
-  border-right: 1px solid #24252b;
-  color: #858893;
-  font-size: 12px;
-}
-
-.track-icon {
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  background: #1d1e24;
-  color: #00e5ff;
-  font-weight: 900;
-}
-
-.track-label strong {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.track-label small {
-  display: grid;
-  place-items: center;
-  min-width: 18px;
-  height: 18px;
-  border-radius: 999px;
-  background: #1d2933;
-  color: #00e5ff;
-  font-size: 10px;
-  font-weight: 900;
-}
-
-.track-label button {
-  width: 22px;
-  height: 22px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: #626670;
-  font-size: 10px;
-}
-
-.track-label button.active {
-  background: #2d2430;
-  color: #ffcf5a;
-}
-
-.track-label button:hover {
-  background: #22242b;
-  color: #d7dae1;
-}
-
-.track-lane {
-  position: relative;
-  min-height: 44px;
-  background: #17181d;
-  box-shadow: inset 0 -1px 0 #202127;
-}
-
-.lane-line {
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: rgba(255, 255, 255, 0.035);
-  pointer-events: none;
-}
-
-.lane-line:first-child {
-  display: none;
-}
-
-.timeline-clip {
-  position: absolute;
-  display: flex;
-  align-items: center;
-  min-width: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 6px;
-  overflow: hidden;
-  cursor: grab;
-  transition: filter 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
-}
-
-.timeline-clip:hover {
-  filter: brightness(1.12);
-  border-color: rgba(255, 255, 255, 0.34);
-}
-
-.timeline-clip.selected {
-  border-color: #e8ffff;
-  box-shadow: 0 0 0 1px #00c9d8;
-}
-
-.timeline-clip.locked {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.timeline-clip.video {
-  background: linear-gradient(90deg, #064c76, #0d6efd);
-}
-
-.timeline-clip.audio {
-  background: linear-gradient(90deg, #38206f, #8f5cff);
-}
-
-.timeline-clip.text,
-.timeline-clip.image {
-  background: linear-gradient(90deg, #6a4b12, #e6a23c);
-}
-
-.clip-title {
-  position: relative;
-  z-index: 1;
-  padding: 0 10px;
-  overflow: hidden;
-  color: #fff;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  font-weight: 800;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
-}
-
-.waveform {
-  position: absolute;
-  inset: 0;
-  padding: 3px 8px;
-}
-
-.waveform i {
-  background: rgba(255, 255, 255, 0.6);
-}
-
-.resize-handle {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  z-index: 3;
-  width: 7px;
-  border: 0;
-  background: transparent;
-  cursor: ew-resize;
-}
-
-.resize-handle:hover {
-  background: rgba(255, 255, 255, 0.35);
-}
-
-.resize-handle.left {
-  left: 0;
-}
-
-.resize-handle.right {
-  right: 0;
-}
-
-@media (max-width: 1150px) {
-  .editor-body {
-    grid-template-columns: 260px minmax(0, 1fr);
-  }
-
-  .right-panel {
-    display: none;
-  }
-}
-
-@media (max-width: 820px) {
-  .capcut-shell {
-    grid-template-rows: auto minmax(0, 1fr) 220px;
-  }
-
-  .topbar,
-  .editor-body {
-    grid-template-columns: 1fr;
-  }
-
-  .top-center,
-  .top-right,
-  .left-panel {
-    display: none;
-  }
+.switch-row { grid-template-columns: 1fr auto; align-items: center; }
+.switch-row input { accent-color: #22d3ee; }
+.clip-inspector-head,
+.progress-topline { display: flex; justify-content: space-between; align-items: center; }
+.clip-inspector-head span { color: #001317; background: #67e8f9; border-radius: 999px; padding: 3px 8px; font-size: 11px; font-weight: 800; }
+.clip-inspector p,
+.progress-card p { margin: 0; color: #a1a1aa; font-size: 12px; line-height: 1.5; }
+.trim-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.progress-track { height: 8px; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,0.075); }
+.progress-track i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #22d3ee, #2dd4bf); box-shadow: 0 0 20px rgba(34,211,238,0.34); }
+
+@media (max-width: 1100px) {
+  .node-topbar { grid-template-columns: 1fr auto; height: auto; min-height: 72px; }
+  .graph-toolbar { display: none; }
+  .node-layout { grid-template-columns: 260px 1fr; }
+  .properties-panel { display: none; }
 }
 </style>

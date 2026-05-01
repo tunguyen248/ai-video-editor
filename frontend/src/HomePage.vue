@@ -6,7 +6,7 @@
         <p class="eyebrow">Built for modern post-production teams</p>
         <h1>Make every cut feel intentional.</h1>
         <p class="hero-copy">
-          Reel Studio helps editors turn long footage into polished social clips with scene detection,
+          Alcut Studio helps editors turn long footage into polished social clips with scene detection,
           smart highlight suggestions, and caption-ready exports in minutes.
         </p>
         <div class="hero-actions">
@@ -72,7 +72,7 @@
     </main>
 
     <footer class="site-footer">
-      <span>Reel Studio</span>
+      <span>Alcut Studio</span>
       <span>© {{ year }} — Crafted for video editors</span>
     </footer>
   </div>
@@ -138,14 +138,12 @@ const testimonials = [
 </script>
 
 <style scoped>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap');
-
 :global(*) { box-sizing: border-box; }
 :global(body) {
   margin: 0;
-  font-family: 'DM Sans', sans-serif;
-  background: linear-gradient(180deg, #f8f2ea 0%, #f6f4ef 40%, #f3f1ec 100%);
-  color: #1f1a17;
+  font-family: Geist, Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--studio-workspace);
+  color: var(--studio-text);
 }
 
 .page {
@@ -164,13 +162,12 @@ const testimonials = [
   text-transform: uppercase;
   letter-spacing: 0.14em;
   font-size: 0.72rem;
-  color: #9b6a4b;
+  color: var(--studio-cyan-hot);
   margin-bottom: 1rem;
   font-weight: 600;
 }
 
 h1, h2, h3 {
-  font-family: 'Fraunces', serif;
   margin: 0;
 }
 
@@ -183,7 +180,7 @@ h1 {
 .hero-copy {
   margin-top: 1.2rem;
   max-width: 60ch;
-  color: #4d413a;
+  color: var(--studio-muted);
   font-size: 1.1rem;
 }
 
@@ -200,13 +197,17 @@ h1 {
 }
 
 .btn-primary {
-  background: #1f1a17;
-  color: #f5ede4;
+  border-color: rgba(103, 232, 249, 0.36);
+  background: linear-gradient(180deg, rgba(103, 232, 249, 0.94), rgba(34, 211, 238, 0.86));
+  color: #031214;
+  box-shadow: var(--studio-shadow-cyan);
 }
 
 .btn-ghost {
-  border-color: #cfb6a4;
-  color: #754f37;
+  border-color: var(--studio-border);
+  color: var(--studio-muted);
+  background: rgba(255, 255, 255, 0.045);
+  backdrop-filter: blur(18px);
 }
 
 .metrics {
@@ -217,14 +218,16 @@ h1 {
 }
 
 .metrics article {
-  border: 1px solid #dccbbf;
-  border-radius: 16px;
+  border: 1px solid var(--studio-border);
+  border-radius: 8px;
   padding: 1rem;
-  background: rgba(255, 255, 255, 0.46);
+  background: var(--studio-panel-gradient);
+  box-shadow: var(--studio-shadow-panel);
+  backdrop-filter: blur(22px);
 }
 
 .metric-value { font-size: 1.35rem; font-weight: 700; margin: 0 0 0.2rem; }
-.metric-label { margin: 0; color: #6b5950; font-size: 0.9rem; }
+.metric-label { margin: 0; color: var(--studio-muted); font-size: 0.9rem; }
 
 .section { margin-top: 3.8rem; }
 .section-head { max-width: 760px; }
@@ -244,14 +247,16 @@ h1 {
 .card,
 .quote {
   padding: 1.2rem;
-  border-radius: 18px;
-  border: 1px solid #dfd2c8;
-  background: #fff9f4;
+  border-radius: 8px;
+  border: 1px solid var(--studio-border);
+  background: var(--studio-panel-gradient);
+  box-shadow: var(--studio-shadow-panel);
+  backdrop-filter: blur(22px);
 }
 
 .card-kicker {
   margin: 0;
-  color: #985d40;
+  color: var(--studio-cyan-hot);
   font-size: 0.78rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -259,12 +264,15 @@ h1 {
 }
 
 .card h3 { margin: 0.55rem 0; font-size: 1.3rem; }
-.card p:last-child { margin: 0; color: #594c44; }
+.card p:last-child { margin: 0; color: var(--studio-muted); }
 
 .warm-block {
-  background: linear-gradient(135deg, #f1d6c4 0%, #f5ebdf 70%);
-  border-radius: 24px;
+  background: var(--studio-panel-radial);
+  border: 1px solid var(--studio-border);
+  border-radius: 8px;
   padding: 2rem;
+  box-shadow: var(--studio-shadow-panel);
+  backdrop-filter: blur(24px);
 }
 
 .steps {
@@ -280,44 +288,46 @@ h1 {
   grid-template-columns: 56px 1fr;
   gap: 1rem;
   align-items: start;
-  border-top: 1px solid #cbaf9f;
+  border-top: 1px solid var(--studio-border);
   padding-top: 1rem;
 }
 
 .steps span {
-  font-family: 'Fraunces', serif;
   font-size: 1.4rem;
-  color: #8a4c2e;
+  color: var(--studio-cyan-hot);
 }
 
 .quote p {
   font-size: 1.05rem;
   margin: 0;
-  color: #342b26;
+  color: var(--studio-text);
 }
 
 .quote footer {
   margin-top: 0.95rem;
-  color: #735f53;
+  color: var(--studio-muted);
   font-size: 0.9rem;
 }
 
 .cta {
   margin-top: 4rem;
   padding: 2rem;
-  border-radius: 22px;
-  background: #1f1a17;
-  color: #efe6dc;
+  border: 1px solid var(--studio-border);
+  border-radius: 8px;
+  background: var(--studio-panel-radial);
+  color: var(--studio-text);
+  box-shadow: var(--studio-shadow-panel);
+  backdrop-filter: blur(24px);
 }
 
 .cta h2 { font-size: clamp(1.5rem, 4vw, 2.2rem); }
-.cta p { color: #dccfc1; max-width: 56ch; }
+.cta p { color: var(--studio-muted); max-width: 56ch; }
 
 .site-footer {
   margin-top: 2.6rem;
   padding-top: 1rem;
-  border-top: 1px solid #d8c9be;
-  color: #76675d;
+  border-top: 1px solid var(--studio-border);
+  color: var(--studio-faint);
   font-size: 0.9rem;
   display: flex;
   justify-content: space-between;
