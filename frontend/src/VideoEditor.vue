@@ -1,7 +1,7 @@
 <!-- Hash-route shell that switches between the home page and the editor lab. -->
 <template>
   <div class="site-shell">
-    <header v-if="currentRoute !== '/lab'" class="global-header">
+    <header v-if="!immersiveRoute" class="global-header">
       <a href="#/" class="logo">
         <span class="logo-mark">◆</span>
         <span>Alcut Studio</span>
@@ -9,6 +9,7 @@
       <nav>
         <a href="#/" :class="{ active: currentRoute === '/' }">Home</a>
         <a href="#/lab" :class="{ active: currentRoute === '/lab' }">Video Lab</a>
+        <a href="#/builder" :class="{ active: currentRoute === '/builder' }">Template Builder</a>
       </nav>
     </header>
 
@@ -19,13 +20,14 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import HomePage from './HomePage.vue'
+import TemplateBuilder from './TemplateBuilder.vue'
 import VideoLab from './VideoLab.vue'
 
 const currentRoute = ref('/')
 
 const readRoute = () => {
   const hash = window.location.hash.replace('#', '') || '/'
-  currentRoute.value = hash === '/lab' ? '/lab' : '/'
+  currentRoute.value = ['/lab', '/builder'].includes(hash) ? hash : '/'
 }
 
 onMounted(() => {
@@ -38,7 +40,12 @@ onMounted(() => {
 
 onBeforeUnmount(() => window.removeEventListener('hashchange', readRoute))
 
-const activeView = computed(() => (currentRoute.value === '/lab' ? VideoLab : HomePage))
+const immersiveRoute = computed(() => currentRoute.value === '/lab' || currentRoute.value === '/builder')
+const activeView = computed(() => {
+  if (currentRoute.value === '/lab') return VideoLab
+  if (currentRoute.value === '/builder') return TemplateBuilder
+  return HomePage
+})
 </script>
 
 <style scoped>
