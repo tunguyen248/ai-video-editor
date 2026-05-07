@@ -1,46 +1,26 @@
 {
-  "id": "valorant_fullscreen_v1",
-  "name": "Valorant Fullscreen",
+  "id": "valorant_hud_relayout_v1",
+  "name": "Valorant HUD Relayout",
   "game": "Valorant",
   "gameId": "valorant",
   "category": "Competitive FPS",
-  "layout": "Fullscreen",
+  "layout": "HUD Crop Relayout",
   "aspectRatio": "9:16",
-  "thumbnail": "/templates/valorant_fullscreen.png",
+  "thumbnail": "/templates/valorant_hud_relayout.png",
   "output": {
     "width": 1080,
     "height": 1920,
     "fps": 60,
-    "format": "mp4"
+    "format": "mp4",
+    "background": "#050505"
+  },
+  "source": {
+    "id": "main-video",
+    "type": "video",
+    "width": 1920,
+    "height": 1080
   },
   "controls": [
-    {
-      "id": "gameplayScale",
-      "label": "Gameplay Scale",
-      "type": "slider",
-      "min": 0.7,
-      "max": 1.2,
-      "step": 0.01,
-      "default": 0.95
-    },
-    {
-      "id": "gameplayX",
-      "label": "Gameplay X Position",
-      "type": "slider",
-      "min": -300,
-      "max": 300,
-      "step": 1,
-      "default": 0
-    },
-    {
-      "id": "gameplayY",
-      "label": "Gameplay Y Position",
-      "type": "slider",
-      "min": -400,
-      "max": 400,
-      "step": 1,
-      "default": -20
-    },
     {
       "id": "backgroundBlur",
       "label": "Background Blur",
@@ -49,6 +29,126 @@
       "max": 40,
       "step": 1,
       "default": 18
+    },
+    {
+      "id": "debugBoxes",
+      "label": "Show Crop Boxes",
+      "type": "toggle",
+      "default": false
+    }
+  ],
+  "layers": [
+    {
+      "id": "blurred-background",
+      "type": "videoFill",
+      "sourceId": "main-video",
+      "destinationRect": {
+        "x": 0,
+        "y": 0,
+        "width": 1080,
+        "height": 1920
+      },
+      "blur": true,
+      "opacity": 0.72,
+      "zIndex": 0
+    },
+    {
+      "id": "main-gameplay-center-crop",
+      "type": "videoCrop",
+      "sourceId": "main-video",
+      "sourceRect": {
+        "x": 656,
+        "y": 0,
+        "width": 608,
+        "height": 1080
+      },
+      "destinationRect": {
+        "x": 0,
+        "y": 0,
+        "width": 1080,
+        "height": 1920
+      },
+      "zIndex": 1
+    },
+    {
+      "id": "minimap",
+      "type": "videoCrop",
+      "sourceId": "main-video",
+      "sourceRect": {
+        "x": 0,
+        "y": 0,
+        "width": 430,
+        "height": 330
+      },
+      "destinationRect": {
+        "x": 48,
+        "y": 72,
+        "width": 330,
+        "height": 254
+      },
+      "borderRadius": 16,
+      "debugColor": "#ef4444",
+      "zIndex": 10
+    },
+    {
+      "id": "ally-team-bar",
+      "type": "videoCrop",
+      "sourceId": "main-video",
+      "sourceRect": {
+        "x": 480,
+        "y": 16,
+        "width": 388,
+        "height": 118
+      },
+      "destinationRect": {
+        "x": 420,
+        "y": 70,
+        "width": 560,
+        "height": 170
+      },
+      "borderRadius": 16,
+      "debugColor": "#ef4444",
+      "zIndex": 11
+    },
+    {
+      "id": "enemy-team-bar",
+      "type": "videoCrop",
+      "sourceId": "main-video",
+      "sourceRect": {
+        "x": 1060,
+        "y": 18,
+        "width": 396,
+        "height": 112
+      },
+      "destinationRect": {
+        "x": 420,
+        "y": 270,
+        "width": 560,
+        "height": 158
+      },
+      "borderRadius": 16,
+      "debugColor": "#ef4444",
+      "zIndex": 12
+    },
+    {
+      "id": "kill-feed",
+      "type": "videoCrop",
+      "sourceId": "main-video",
+      "sourceRect": {
+        "x": 1575,
+        "y": 42,
+        "width": 330,
+        "height": 128
+      },
+      "destinationRect": {
+        "x": 420,
+        "y": 468,
+        "width": 560,
+        "height": 216
+      },
+      "borderRadius": 16,
+      "debugColor": "#ef4444",
+      "zIndex": 13
     }
   ]
 }
