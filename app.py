@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import MAX_CONTENT_LENGTH, OUTPUT_DIR, PORT, TRANSCRIPT_DIR
-from core.job_manager import create_processing_job, get_analysis_video, get_processing_job, start_background_job
+from core.job_manager import create_processing_job, get_analysis_video, get_processing_job, register_analysis_video, start_background_job
 from core.processor import (
     run_caption_job,
     run_chunked_caption_job,
@@ -31,6 +31,10 @@ from core.processor import (
     run_smart_cut_job,
 )
 from core.utils import cleanup_startup_folders, is_allowed_file, parse_bool_flag, save_uploaded_video
+from core.vertical_renderer import run_vertical_render_job
+from engine.ffmpeg_engine import get_video_dimensions_ffprobe
+from services.game_detection_service import detect_game_from_filename
+from services.template_service import list_presets, list_templates, save_preset
 from services.transcription import get_whisper_capabilities, normalize_whisper_device
 
 app = FastAPI(title="AI Video Editor API")
@@ -74,6 +78,64 @@ async def _save_upload(video: UploadFile, video_id: str) -> Path:
 def _json_error(exc: ValueError) -> HTTPException:
     """Translate request parsing errors into consistent JSON HTTP failures."""
     return HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/templates")
+async def templates() -> list[dict[str, Any]]:
+    return list_templates()
+
+
+@app.post("/detect_game")
+async def detect_game(video: UploadFile = File(...)) -> dict[str, Any]:
+    video_id = uuid.uuid4().hex
+    input_path = await _save_upload(video, video_id)
+    register_analysis_video(video_id, input_path)
+
+    source_width, source_height = get_video_dimensions_ffprobe(input_path)
+    is_vertical_source = source_height > source_width
+    detection = detect_game_from_filename(video.filename or input_path.name, is_vertical_source=is_vertical_source)
+    return {
+        "videoId": video_id,
+        "gameId": detection["gameId"],
+        "gameName": detection["gameName"],
+        "confidence": detection["confidence"],
+        "recommendedTemplateId": detection["recommendedTemplateId"],
+        "sourceVideoPath": f"/source/{video_id}",
+        "sourceWidth": source_width,
+        "sourceHeight": source_height,
+        "sourceAspectRatio": "9:16" if is_vertical_source else "16:9",
+    }
+
+
+@app.post("/render_vertical", status_code=202)
+async def render_vertical(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, str]:
+    video_id = payload.get("videoId") or payload.get("video_id")
+    template_id = payload.get("templateId") or payload.get("template_id")
+    params = payload.get("params", {})
+
+    if not video_id or not isinstance(video_id, str):
+        raise HTTPException(status_code=400, detail="Missing required field: videoId")
+    if not template_id or not isinstance(template_id, str):
+        raise HTTPException(status_code=400, detail="Missing required field: templateId")
+    if params is not None and not isinstance(params, dict):
+        raise HTTPException(status_code=400, detail="Field params must be an object.")
+
+    job_id = create_processing_job("render_vertical")
+    start_background_job(run_vertical_render_job, job_id, video_id, template_id, params)
+    return {"job_id": job_id}
+
+
+@app.get("/presets")
+async def presets() -> list[dict[str, Any]]:
+    return list_presets()
+
+
+@app.post("/presets")
+async def create_preset(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    try:
+        return save_preset(payload)
+    except ValueError as exc:
+        raise _json_error(exc) from exc
 
 
 @app.post("/analyze_scenes", status_code=202)

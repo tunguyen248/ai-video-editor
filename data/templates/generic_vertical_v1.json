@@ -1,0 +1,54 @@
+{
+  "id": "generic_vertical_v1",
+  "name": "Generic Gaming 9:16",
+  "game": "Generic",
+  "gameId": "generic",
+  "category": "Universal",
+  "layout": "Fullscreen",
+  "aspectRatio": "9:16",
+  "thumbnail": "/templates/generic_vertical.png",
+  "output": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 60,
+    "format": "mp4"
+  },
+  "controls": [
+    {
+      "id": "gameplayScale",
+      "label": "Gameplay Scale",
+      "type": "slider",
+      "min": 0.7,
+      "max": 1.2,
+      "step": 0.01,
+      "default": 0.9
+    },
+    {
+      "id": "gameplayX",
+      "label": "Gameplay X Position",
+      "type": "slider",
+      "min": -300,
+      "max": 300,
+      "step": 1,
+      "default": 0
+    },
+    {
+      "id": "gameplayY",
+      "label": "Gameplay Y Position",
+      "type": "slider",
+      "min": -400,
+      "max": 400,
+      "step": 1,
+      "default": 0
+    },
+    {
+      "id": "backgroundBlur",
+      "label": "Background Blur",
+      "type": "slider",
+      "min": 0,
+      "max": 40,
+      "step": 1,
+      "default": 20
+    }
+  ]
+}

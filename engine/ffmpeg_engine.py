@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -143,6 +144,43 @@ class FFmpegEngine:
             raise RuntimeError("Could not determine a positive video duration.")
         return duration
 
+    def get_video_dimensions(self, video_path: Path) -> tuple[int, int]:
+        command = [
+            self.ffprobe_binary,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height:stream_tags=rotate:stream_side_data=rotation",
+            "-of",
+            "json",
+            str(video_path),
+        ]
+        completed = self.run(command, "Failed reading video dimensions")
+        try:
+            payload = json.loads(completed.stdout)
+            stream = payload["streams"][0]
+            width = int(stream["width"])
+            height = int(stream["height"])
+        except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise RuntimeError("ffprobe did not return valid video dimensions.") from exc
+
+        rotation = 0
+        try:
+            rotation = int(float(stream.get("tags", {}).get("rotate", 0)))
+        except (TypeError, ValueError):
+            rotation = 0
+        for side_data in stream.get("side_data_list", []) or []:
+            try:
+                rotation = int(float(side_data.get("rotation", rotation)))
+            except (TypeError, ValueError):
+                continue
+
+        if abs(rotation) % 180 == 90:
+            return height, width
+        return width, height
+
     def has_audio_stream(self, video_path: Path) -> bool:
         command = [
             self.ffprobe_binary,
@@ -235,6 +273,70 @@ class FFmpegEngine:
             str(output_path),
         ]
         self.run(command, "Failed burning captions into video")
+        return output_path
+
+    def render_vertical_template(
+        self,
+        video_path: Path,
+        output_path: Path,
+        *,
+        width: int = 1080,
+        height: int = 1920,
+        fps: int = 60,
+        gameplay_scale: float = 0.92,
+        gameplay_x: int = 0,
+        gameplay_y: int = -40,
+        background_blur: int = 22,
+        source_fit: str = "width",
+    ) -> Path:
+        """Render a 9:16 layout with a blurred background and centered gameplay foreground."""
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        safe_scale = max(0.05, float(gameplay_scale))
+        foreground_width = max(2, int(width * safe_scale) // 2 * 2)
+        foreground_height = max(2, int(height * safe_scale) // 2 * 2)
+        blur_filter = f",boxblur={max(0, int(background_blur))}:10" if background_blur > 0 else ""
+
+        if source_fit == "contain":
+            foreground_filter = f"[0:v]scale={foreground_width}:{foreground_height}:force_original_aspect_ratio=decrease[fg];"
+        else:
+            foreground_filter = f"[0:v]scale={foreground_width}:-2[fg];"
+
+        filter_complex = (
+            f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height}{blur_filter}[bg];"
+            f"{foreground_filter}"
+            f"[bg][fg]overlay=(W-w)/2+{int(gameplay_x)}:(H-h)/2+{int(gameplay_y)}[v]"
+        )
+
+        command = [
+            self.ffmpeg_binary,
+            "-y",
+            "-i",
+            str(video_path),
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[v]",
+            "-map",
+            "0:a?",
+            "-r",
+            str(fps),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+
+        self.run(command, "Failed rendering vertical template")
         return output_path
 
     def create_highlight_segment(
@@ -505,6 +607,11 @@ smart_chunker = SmartChunker(ffmpeg_engine)
 def get_video_duration_ffprobe(video_path: Path) -> float:
     """Read source duration through the shared FFmpeg engine."""
     return ffmpeg_engine.get_video_duration(video_path)
+
+
+def get_video_dimensions_ffprobe(video_path: Path) -> tuple[int, int]:
+    """Read display-corrected source dimensions through the shared FFmpeg engine."""
+    return ffmpeg_engine.get_video_dimensions(video_path)
 
 
 def format_srt_timestamp(seconds: float) -> str:

@@ -2,9 +2,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
-require('dotenv').config();
-
-export const API_BASE = process.env.API_BASE;
+export const API_BASE = (import.meta.env.VITE_API_BASE || import.meta.env.API_BASE || 'http://localhost:5000').replace(/\/$/, '')
 
 const normalizeMoment = (moment, index) => ({
   id: moment.id || `moment-${index + 1}`,
@@ -43,11 +41,18 @@ export const useEditorStore = defineStore('editor', () => {
   const progress = ref(0)
   const activeJobType = ref('')
   const exportUrl = ref('')
+  const verticalExportUrl = ref('')
+  const templates = ref([])
+  const presets = ref([])
+  const selectedTemplateId = ref('')
+  const templateParams = ref({})
+  const gameDetection = ref(null)
   const pollTimer = ref(null)
 
   const isProcessing = computed(() => status.value === 'processing')
   const gpuAvailable = computed(() => Boolean(whisperCapabilities.value?.devices?.gpu?.available))
   const selectedClip = computed(() => moments.value.find(moment => moment.id === selectedClipId.value) || moments.value[0] || null)
+  const selectedTemplate = computed(() => templates.value.find(template => template.id === selectedTemplateId.value) || null)
   const durationEstimate = computed(() => Math.max(1, ...moments.value.map(moment => moment.end), ...transcriptSegments.value.map(segment => Number(segment.end || 0))))
 
   const clearPollTimer = () => {
@@ -76,6 +81,10 @@ export const useEditorStore = defineStore('editor', () => {
     semanticDiagnostics.value = {}
     selectedClipId.value = ''
     exportUrl.value = ''
+    verticalExportUrl.value = ''
+    selectedTemplateId.value = ''
+    templateParams.value = {}
+    gameDetection.value = null
     status.value = 'idle'
     statusMessage.value = ''
     progress.value = 0
@@ -143,12 +152,163 @@ export const useEditorStore = defineStore('editor', () => {
     }
   }
 
+  const loadTemplates = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/templates`)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail || data.error || 'Template load failed.')
+      templates.value = Array.isArray(data) ? data : []
+    } catch (error) {
+      setError(error.message || 'Template load failed.')
+    }
+  }
+
+  const loadPresets = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/presets`)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail || data.error || 'Preset load failed.')
+      presets.value = Array.isArray(data) ? data : []
+    } catch {
+      presets.value = []
+    }
+  }
+
+  const getTemplateDefaults = template => Object.fromEntries(
+    (template?.controls || []).map(control => [control.id, control.default])
+  )
+
+  const loadTemplate = templateId => {
+    const template = templates.value.find(item => item.id === templateId)
+    if (!template) return
+    selectedTemplateId.value = template.id
+    templateParams.value = getTemplateDefaults(template)
+  }
+
+  const loadPreset = preset => {
+    const selectedPreset = typeof preset === 'string'
+      ? presets.value.find(item => item.id === preset)
+      : preset
+    if (!selectedPreset) return
+    loadTemplate(selectedPreset.baseTemplateId)
+    templateParams.value = {
+      ...templateParams.value,
+      ...(selectedPreset.params || {}),
+    }
+  }
+
+  const updateTemplateParam = (key, value) => {
+    templateParams.value = {
+      ...templateParams.value,
+      [key]: Number(value),
+    }
+  }
+
+  const detectGame = async () => {
+    if (!selectedFile.value) return setError('Select a video first.')
+
+    clearPollTimer()
+    activeJobType.value = 'detect_game'
+    gameDetection.value = null
+    verticalExportUrl.value = ''
+    setStatus('processing', 'Uploading clip for game detection', 8)
+
+    const fd = new FormData()
+    fd.append('video', selectedFile.value)
+
+    try {
+      const result = await startRequest('/detect_game', {
+        method: 'POST',
+        body: fd,
+      })
+
+      gameDetection.value = result
+      videoId.value = result.videoId || ''
+      sourceVideoUrl.value = result.sourceVideoPath
+        ? `${API_BASE}${result.sourceVideoPath}`
+        : localSourceUrl.value
+      sourceMimeType.value = selectedFile.value?.type || 'video/mp4'
+      status.value = 'complete'
+      statusMessage.value = result.gameName === 'Unknown'
+        ? 'No game detected. Generic template recommended.'
+        : `Detected ${result.gameName}.`
+      progress.value = 100
+      activeJobType.value = ''
+    } catch (error) {
+      setError(error.message || 'Game detection failed.')
+    }
+  }
+
+  const renderVertical = async () => {
+    if (!videoId.value) return setError('Detect game before rendering.')
+    if (!selectedTemplateId.value) return setError('Select a template first.')
+
+    clearPollTimer()
+    activeJobType.value = 'render_vertical'
+    verticalExportUrl.value = ''
+    setStatus('processing', 'Submitting vertical render', 5)
+
+    try {
+      const payload = await startRequest('/render_vertical', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          videoId: videoId.value,
+          templateId: selectedTemplateId.value,
+          params: templateParams.value,
+        }),
+      })
+      await waitForJob(payload.job_id, result => {
+        verticalExportUrl.value = result.export_path ? `${API_BASE}${result.export_path}` : ''
+        status.value = 'complete'
+        statusMessage.value = 'Vertical export complete.'
+        progress.value = 100
+        activeJobType.value = ''
+      })
+    } catch (error) {
+      setError(error.message || 'Vertical render failed.')
+    }
+  }
+
+  const savePreset = async ({ name, description = '' }) => {
+    if (!selectedTemplate.value) return setError('Select a template before saving a preset.')
+    const template = selectedTemplate.value
+
+    try {
+      const preset = await startRequest('/presets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          baseTemplateId: template.id,
+          name,
+          game: template.game,
+          gameId: template.gameId,
+          category: template.category,
+          description,
+          params: templateParams.value,
+        }),
+      })
+      presets.value = [
+        preset,
+        ...presets.value.filter(item => item.id !== preset.id),
+      ]
+      status.value = 'complete'
+      statusMessage.value = `Saved preset "${preset.name}".`
+      progress.value = 100
+      return preset
+    } catch (error) {
+      setError(error.message || 'Preset save failed.')
+      return null
+    }
+  }
+
   const detectKeyMoments = async () => {
     // Upload the current file, then hydrate the editable timeline from job results.
     if (!selectedFile.value) return setError('Select a video first.')
     clearPollTimer()
     activeJobType.value = 'key_moments'
     exportUrl.value = ''
+    verticalExportUrl.value = ''
     moments.value = []
     transcriptSegments.value = []
     audioPeaks.value = []
@@ -250,11 +410,26 @@ export const useEditorStore = defineStore('editor', () => {
     progress,
     activeJobType,
     exportUrl,
+    verticalExportUrl,
+    templates,
+    presets,
+    selectedTemplateId,
+    selectedTemplate,
+    templateParams,
+    gameDetection,
     isProcessing,
     gpuAvailable,
     durationEstimate,
     setSelectedFile,
     loadWhisperCapabilities,
+    loadTemplates,
+    loadPresets,
+    loadTemplate,
+    loadPreset,
+    updateTemplateParam,
+    detectGame,
+    renderVertical,
+    savePreset,
     detectKeyMoments,
     selectClip,
     updateClipRange,

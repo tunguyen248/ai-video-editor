@@ -15,6 +15,9 @@ from core.logger import configure_logging
 BASE_DIR = Path(__file__).resolve().parent
 TEMP_DIR = BASE_DIR / "temp"
 OUTPUT_DIR = BASE_DIR / "output"
+DATA_DIR = BASE_DIR / "data"
+TEMPLATE_DIR = DATA_DIR / "templates"
+PRESET_DIR = DATA_DIR / "presets"
 TRANSCRIPT_DIR = BASE_DIR / "storage" / "transcripts"
 WHISPER_MODEL_NAME = os.getenv("WHISPER_MODEL_NAME", "base")
 
