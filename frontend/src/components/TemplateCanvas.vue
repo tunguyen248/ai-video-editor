@@ -1,8 +1,8 @@
 <template>
-  <section class="canvas-workspace glass-panel" aria-label="Template canvas">
+  <section class="canvas-workspace glass-panel" :class="`${canvasMode}-mode`" aria-label="Template canvas">
     <div class="canvas-header">
       <div>
-        <strong>1080x1920 Preview</strong>
+        <strong>{{ canvasTitle }}</strong>
         <span>{{ statusLabel }}</span>
       </div>
       <button type="button" class="play-button" :disabled="!sourceVideoUrl" @click="togglePlayback">
@@ -11,7 +11,7 @@
     </div>
 
     <div class="canvas-stage">
-      <div class="phone-frame" :style="frameStyle">
+      <div class="preview-frame" :class="frameClass" :style="frameStyle">
         <video
           v-if="sourceVideoUrl"
           ref="sourceVideo"
@@ -84,9 +84,14 @@ const props = defineProps({
     type: Number,
     default: 0.35,
   },
+  canvasMode: {
+    type: String,
+    default: 'source',
+    validator: value => ['source', 'output'].includes(value),
+  },
 })
 
-const emit = defineEmits(['select-layer', 'update-destination'])
+const emit = defineEmits(['select-layer', 'update-source', 'update-destination', 'update-source-size'])
 
 const sourceVideo = ref(null)
 const previewCanvas = ref(null)
@@ -97,17 +102,40 @@ const videoError = ref(false)
 const activeInteraction = ref(null)
 
 const resizeHandles = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
+const SOURCE_DISPLAY_WIDTH = 1920
 
+const isSourceMode = computed(() => props.canvasMode === 'source')
 const outputWidth = computed(() => Number(props.template?.output?.width || 1080))
 const outputHeight = computed(() => Number(props.template?.output?.height || 1920))
+const sourceDefinition = computed(() => (
+  props.template?.sources?.find(source => source.id === 'main-video')
+  || props.template?.sources?.[0]
+  || props.template?.source
+  || {}
+))
+const sourceFrameWidth = computed(() => Number(sourceDefinition.value.width || 1920))
+const sourceFrameHeight = computed(() => Number(sourceDefinition.value.height || 1080))
+const frameWidth = computed(() => (isSourceMode.value ? sourceFrameWidth.value : outputWidth.value))
+const frameHeight = computed(() => (isSourceMode.value ? sourceFrameHeight.value : outputHeight.value))
+const displayFrameWidth = computed(() => (isSourceMode.value ? SOURCE_DISPLAY_WIDTH : outputWidth.value))
+const displayFrameHeight = computed(() => {
+  if (!isSourceMode.value) return outputHeight.value
+  const sourceRatio = sourceFrameHeight.value / Math.max(1, sourceFrameWidth.value)
+  return Math.round(SOURCE_DISPLAY_WIDTH * sourceRatio)
+})
 const scale = computed(() => Number(props.previewScale || 0.35))
-const previewWidth = computed(() => Math.round(outputWidth.value * scale.value))
-const previewHeight = computed(() => Math.round(outputHeight.value * scale.value))
+const previewWidth = computed(() => Math.round(displayFrameWidth.value * scale.value))
+const previewHeight = computed(() => Math.round(displayFrameHeight.value * scale.value))
+const xScale = computed(() => previewWidth.value / frameWidth.value)
+const yScale = computed(() => previewHeight.value / frameHeight.value)
 
 const frameStyle = computed(() => ({
   '--preview-width': `${previewWidth.value}px`,
   '--preview-height': `${previewHeight.value}px`,
 }))
+
+const frameClass = computed(() => (isSourceMode.value ? 'source-frame' : 'output-frame'))
+const canvasTitle = computed(() => (isSourceMode.value ? 'Source Crop Boxes' : '1080x1920 Output Preview'))
 
 const visibleLayers = computed(() => (
   [...(props.template?.layers || [])]
@@ -119,7 +147,8 @@ const statusLabel = computed(() => {
   if (!props.sourceVideoUrl) return 'Waiting for source'
   if (videoError.value) return 'Source failed to load'
   if (!videoReady.value) return 'Loading source'
-  return `${visibleLayers.value.length} visible crop layers`
+  if (isSourceMode.value) return `Editing sourceRect on ${sourceFrameWidth.value}x${sourceFrameHeight.value}`
+  return `${visibleLayers.value.length} visible crop layers in the vertical output`
 })
 
 function safeNumber(value, fallback = 0) {
@@ -127,35 +156,46 @@ function safeNumber(value, fallback = 0) {
   return Number.isFinite(number) ? number : fallback
 }
 
-function layerRect(layer) {
-  const rect = layer.destinationRect || {}
+function normalizedRect(rect, fallback) {
   return {
-    x: safeNumber(rect.x, 0),
-    y: safeNumber(rect.y, 0),
-    width: Math.max(1, safeNumber(rect.width, outputWidth.value)),
-    height: Math.max(1, safeNumber(rect.height, outputHeight.value)),
+    x: safeNumber(rect?.x, fallback.x),
+    y: safeNumber(rect?.y, fallback.y),
+    width: Math.max(1, safeNumber(rect?.width, fallback.width)),
+    height: Math.max(1, safeNumber(rect?.height, fallback.height)),
   }
 }
 
-function sourceRect(layer, video) {
-  const rect = layer.sourceRect || {}
-  return {
-    x: safeNumber(rect.x, 0),
-    y: safeNumber(rect.y, 0),
-    width: Math.max(1, safeNumber(rect.width, video.videoWidth || 1920)),
-    height: Math.max(1, safeNumber(rect.height, video.videoHeight || 1080)),
-  }
+function destinationRect(layer) {
+  return normalizedRect(layer.destinationRect, {
+    x: 0,
+    y: 0,
+    width: outputWidth.value,
+    height: outputHeight.value,
+  })
+}
+
+function sourceRect(layer, video = null) {
+  return normalizedRect(layer.sourceRect, {
+    x: 0,
+    y: 0,
+    width: video?.videoWidth || sourceFrameWidth.value,
+    height: video?.videoHeight || sourceFrameHeight.value,
+  })
+}
+
+function editableRect(layer) {
+  return isSourceMode.value ? sourceRect(layer) : destinationRect(layer)
 }
 
 function boxStyle(layer) {
-  const rect = layerRect(layer)
+  const rect = editableRect(layer)
   return {
-    left: `${rect.x * scale.value}px`,
-    top: `${rect.y * scale.value}px`,
-    width: `${rect.width * scale.value}px`,
-    height: `${rect.height * scale.value}px`,
+    left: `${rect.x * xScale.value}px`,
+    top: `${rect.y * yScale.value}px`,
+    width: `${rect.width * xScale.value}px`,
+    height: `${rect.height * yScale.value}px`,
     zIndex: 20 + Number(layer.zIndex || 0),
-    opacity: layer.id === props.selectedLayerId ? 1 : 0.82,
+    opacity: layer.id === props.selectedLayerId ? 1 : 0.86,
   }
 }
 
@@ -178,8 +218,56 @@ function drawEmptyState(ctx) {
   ctx.fillStyle = 'rgba(244, 244, 245, 0.72)'
   ctx.font = '600 13px Inter, system-ui, sans-serif'
   ctx.textAlign = 'center'
-  ctx.fillText('Load a gameplay video to preview crops', previewWidth.value / 2, previewHeight.value / 2)
+  ctx.fillText('Load a gameplay video to preview crop boxes', previewWidth.value / 2, previewHeight.value / 2)
   ctx.restore()
+}
+
+function drawSourceFrame(ctx, video) {
+  ctx.drawImage(
+    video,
+    0,
+    0,
+    video.videoWidth,
+    video.videoHeight,
+    0,
+    0,
+    previewWidth.value,
+    previewHeight.value,
+  )
+}
+
+function drawOutputFrame(ctx, video) {
+  for (const layer of visibleLayers.value) {
+    const source = sourceRect(layer, video)
+    const destination = destinationRect(layer)
+
+    ctx.save()
+    ctx.globalAlpha = Math.max(0, Math.min(1, safeNumber(layer.opacity, 1)))
+
+    try {
+      ctx.drawImage(
+        video,
+        source.x,
+        source.y,
+        source.width,
+        source.height,
+        destination.x * xScale.value,
+        destination.y * yScale.value,
+        destination.width * xScale.value,
+        destination.height * yScale.value,
+      )
+    } catch {
+      ctx.fillStyle = 'rgba(239, 68, 68, 0.18)'
+      ctx.fillRect(
+        destination.x * xScale.value,
+        destination.y * yScale.value,
+        destination.width * xScale.value,
+        destination.height * yScale.value,
+      )
+    }
+
+    ctx.restore()
+  }
 }
 
 function drawCurrentFrame() {
@@ -197,36 +285,10 @@ function drawCurrentFrame() {
     return
   }
 
-  for (const layer of visibleLayers.value) {
-    const source = sourceRect(layer, video)
-    const destination = layerRect(layer)
-
-    ctx.save()
-    ctx.globalAlpha = Math.max(0, Math.min(1, safeNumber(layer.opacity, 1)))
-
-    try {
-      ctx.drawImage(
-        video,
-        source.x,
-        source.y,
-        source.width,
-        source.height,
-        destination.x * scale.value,
-        destination.y * scale.value,
-        destination.width * scale.value,
-        destination.height * scale.value,
-      )
-    } catch {
-      ctx.fillStyle = 'rgba(239, 68, 68, 0.18)'
-      ctx.fillRect(
-        destination.x * scale.value,
-        destination.y * scale.value,
-        destination.width * scale.value,
-        destination.height * scale.value,
-      )
-    }
-
-    ctx.restore()
+  if (isSourceMode.value) {
+    drawSourceFrame(ctx, video)
+  } else {
+    drawOutputFrame(ctx, video)
   }
 }
 
@@ -269,8 +331,15 @@ async function togglePlayback() {
 }
 
 function handleLoadedMetadata() {
+  const video = sourceVideo.value
   videoReady.value = true
   videoError.value = false
+  if (video?.videoWidth && video?.videoHeight) {
+    emit('update-source-size', {
+      width: video.videoWidth,
+      height: video.videoHeight,
+    })
+  }
   drawCurrentFrame()
 }
 
@@ -282,10 +351,10 @@ function handleVideoError() {
 
 function clampRect(rect) {
   const minSize = 24
-  const width = Math.max(minSize, Math.min(outputWidth.value, rect.width))
-  const height = Math.max(minSize, Math.min(outputHeight.value, rect.height))
-  const x = Math.max(0, Math.min(outputWidth.value - width, rect.x))
-  const y = Math.max(0, Math.min(outputHeight.value - height, rect.y))
+  const width = Math.max(minSize, Math.min(frameWidth.value, rect.width))
+  const height = Math.max(minSize, Math.min(frameHeight.value, rect.height))
+  const x = Math.max(0, Math.min(frameWidth.value - width, rect.x))
+  const y = Math.max(0, Math.min(frameHeight.value - height, rect.y))
 
   return {
     x: Math.round(x),
@@ -329,7 +398,7 @@ function startInteraction(event, layer, mode) {
     mode,
     startX: event.clientX,
     startY: event.clientY,
-    startRect: layerRect(layer),
+    startRect: editableRect(layer),
   }
 
   window.addEventListener('pointermove', handlePointerMove)
@@ -340,8 +409,8 @@ function handlePointerMove(event) {
   if (!activeInteraction.value) return
 
   const interaction = activeInteraction.value
-  const dx = (event.clientX - interaction.startX) / scale.value
-  const dy = (event.clientY - interaction.startY) / scale.value
+  const dx = (event.clientX - interaction.startX) / xScale.value
+  const dy = (event.clientY - interaction.startY) / yScale.value
   const nextRect = interaction.mode === 'move'
     ? clampRect({
       ...interaction.startRect,
@@ -350,7 +419,7 @@ function handlePointerMove(event) {
     })
     : resizeRect(interaction.startRect, interaction.mode, dx, dy)
 
-  emit('update-destination', interaction.layerId, nextRect)
+  emit(isSourceMode.value ? 'update-source' : 'update-destination', interaction.layerId, nextRect)
 }
 
 function stopInteraction() {
@@ -359,7 +428,7 @@ function stopInteraction() {
 }
 
 watch(
-  () => [props.template, props.previewScale],
+  () => [props.template, props.previewScale, props.canvasMode],
   () => nextTick(drawCurrentFrame),
   { deep: true },
 )
@@ -451,14 +520,28 @@ onBeforeUnmount(() => {
   padding: 18px;
 }
 
-.phone-frame {
+.preview-frame {
   position: relative;
   width: var(--preview-width);
   height: var(--preview-height);
   overflow: hidden;
-  border: 1px solid rgba(103, 232, 249, 0.24);
   border-radius: 14px;
   background: #050505;
+  box-shadow:
+    0 30px 90px rgba(0, 0, 0, 0.62),
+    0 0 0 8px rgba(255, 255, 255, 0.025);
+}
+
+.source-frame {
+  border: 1px solid rgba(248, 113, 113, 0.36);
+  box-shadow:
+    0 30px 90px rgba(0, 0, 0, 0.62),
+    0 0 0 8px rgba(255, 255, 255, 0.025),
+    0 0 44px rgba(248, 113, 113, 0.1);
+}
+
+.output-frame {
+  border: 1px solid rgba(103, 232, 249, 0.24);
   box-shadow:
     0 30px 90px rgba(0, 0, 0, 0.62),
     0 0 0 8px rgba(255, 255, 255, 0.025),
@@ -494,18 +577,28 @@ onBeforeUnmount(() => {
   position: absolute;
   min-width: 12px;
   min-height: 12px;
-  border: 1px solid rgba(103, 232, 249, 0.78);
-  background: rgba(34, 211, 238, 0.05);
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.3), 0 0 24px rgba(34, 211, 238, 0.14);
   cursor: move;
   pointer-events: auto;
   touch-action: none;
 }
 
-.crop-box.selected {
-  border-color: #c084fc;
-  background: rgba(192, 132, 252, 0.08);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12), 0 0 28px rgba(192, 132, 252, 0.22);
+.source-mode .crop-box {
+  border: 2px solid rgba(248, 45, 45, 0.95);
+  background: rgba(248, 45, 45, 0.045);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.34), 0 0 24px rgba(248, 45, 45, 0.16);
+}
+
+.output-mode .crop-box {
+  border: 1px solid rgba(103, 232, 249, 0.78);
+  background: rgba(34, 211, 238, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.3), 0 0 24px rgba(34, 211, 238, 0.14);
+}
+
+.source-mode .crop-box.selected,
+.output-mode .crop-box.selected {
+  border-color: #67e8f9;
+  background: rgba(34, 211, 238, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14), 0 0 28px rgba(34, 211, 238, 0.24);
 }
 
 .crop-label {
@@ -515,7 +608,7 @@ onBeforeUnmount(() => {
   max-width: calc(100% - 12px);
   overflow: hidden;
   border-radius: 6px;
-  background: rgba(0, 0, 0, 0.66);
+  background: rgba(0, 0, 0, 0.68);
   color: #ecfeff;
   font-size: 10px;
   font-weight: 800;
@@ -531,8 +624,8 @@ onBeforeUnmount(() => {
   height: 10px;
   border: 1px solid rgba(5, 5, 5, 0.85);
   border-radius: 50%;
-  background: #c084fc;
-  box-shadow: 0 0 12px rgba(192, 132, 252, 0.42);
+  background: #67e8f9;
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.42);
 }
 
 .handle-nw { left: -5px; top: -5px; cursor: nwse-resize; }

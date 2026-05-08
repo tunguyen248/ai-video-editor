@@ -52,13 +52,31 @@
             <input v-model="sourceInput" spellcheck="false" @change="applySourceUrl" />
           </label>
 
+          <div class="mode-switch" aria-label="Canvas edit mode">
+            <button
+              type="button"
+              :class="{ active: canvasMode === 'source' }"
+              @click="canvasMode = 'source'"
+            >
+              Source Boxes
+            </button>
+            <button
+              type="button"
+              :class="{ active: canvasMode === 'output' }"
+              @click="canvasMode = 'output'"
+            >
+              9:16 Output
+            </button>
+          </div>
+
           <label class="source-field compact">
             <span>Scale</span>
             <select v-model.number="previewScale">
-              <option :value="0.3">30%</option>
-              <option :value="0.35">35%</option>
-              <option :value="0.4">40%</option>
               <option :value="0.5">50%</option>
+              <option :value="0.65">65%</option>
+              <option :value="0.75">75%</option>
+              <option :value="0.9">90%</option>
+              <option :value="1">100%</option>
             </select>
           </label>
         </div>
@@ -68,8 +86,11 @@
           :source-video-url="sourceVideoUrl"
           :selected-layer-id="selectedLayerId"
           :preview-scale="previewScale"
+          :canvas-mode="canvasMode"
           @select-layer="selectLayer"
+          @update-source="updateLayerSource"
           @update-destination="updateLayerDestination"
+          @update-source-size="updateSourceSize"
         />
       </section>
 
@@ -77,6 +98,7 @@
         <LayerInspector
           :layer="selectedLayer"
           :output-size="template.output"
+          :source-size="sourceSize"
           @update-layer="updateLayer"
         />
 
@@ -199,7 +221,8 @@ const sourceInput = ref(SAMPLE_VIDEO_SRC)
 const sourceVideoUrl = ref(SAMPLE_VIDEO_SRC)
 const selectedFileName = ref('')
 const localObjectUrl = ref('')
-const previewScale = ref(0.35)
+const previewScale = ref(0.75)
+const canvasMode = ref('source')
 
 const selectedLayer = computed(() => (
   template.value.layers.find(layer => layer.id === selectedLayerId.value) || null
@@ -215,6 +238,9 @@ const generatedTemplate = computed(() => ({
 
 const outputWidth = computed(() => Number(template.value.output.width || 1080))
 const outputHeight = computed(() => Number(template.value.output.height || 1920))
+const sourceWidth = computed(() => Number(template.value.sources.find(source => source.id === 'main-video')?.width || 1920))
+const sourceHeight = computed(() => Number(template.value.sources.find(source => source.id === 'main-video')?.height || 1080))
+const sourceSize = computed(() => ({ width: sourceWidth.value, height: sourceHeight.value }))
 
 function normalizeNumber(value, fallback = 0) {
   const number = Number(value)
@@ -315,6 +341,8 @@ function duplicateLayer(layerId) {
   copy.id = `${sourceLayer.id}-copy-${suffix}`
   copy.name = `${sourceLayer.name} Copy`
   copy.zIndex = nextLayerZIndex()
+  copy.sourceRect.x = Math.max(0, Math.min(sourceWidth.value - copy.sourceRect.width, copy.sourceRect.x + 24))
+  copy.sourceRect.y = Math.max(0, Math.min(sourceHeight.value - copy.sourceRect.height, copy.sourceRect.y + 24))
   copy.destinationRect.x = Math.max(0, Math.min(outputWidth.value - copy.destinationRect.width, copy.destinationRect.x + 36))
   copy.destinationRect.y = Math.max(0, Math.min(outputHeight.value - copy.destinationRect.height, copy.destinationRect.y + 36))
   template.value.layers.push(copy)
@@ -374,12 +402,49 @@ function updateLayerDestination(layerId, destinationRect) {
   updateLayer(layerId, { destinationRect })
 }
 
+function updateLayerSource(layerId, sourceRect) {
+  updateLayer(layerId, { sourceRect })
+}
+
+function updateSourceSize({ width, height }) {
+  const nextWidth = Math.max(1, Math.round(Number(width) || 1920))
+  const nextHeight = Math.max(1, Math.round(Number(height) || 1080))
+  const previousWidth = sourceWidth.value
+  const previousHeight = sourceHeight.value
+
+  if (previousWidth !== nextWidth || previousHeight !== nextHeight) {
+    const scaleX = nextWidth / Math.max(1, previousWidth)
+    const scaleY = nextHeight / Math.max(1, previousHeight)
+
+    template.value.layers = template.value.layers.map(layer => {
+      const width = Math.min(nextWidth, Math.max(1, Math.round((layer.sourceRect?.width || nextWidth) * scaleX)))
+      const height = Math.min(nextHeight, Math.max(1, Math.round((layer.sourceRect?.height || nextHeight) * scaleY)))
+      return {
+        ...layer,
+        sourceRect: {
+          x: Math.max(0, Math.min(nextWidth - width, Math.round((layer.sourceRect?.x || 0) * scaleX))),
+          y: Math.max(0, Math.min(nextHeight - height, Math.round((layer.sourceRect?.y || 0) * scaleY))),
+          width,
+          height,
+        },
+      }
+    })
+  }
+
+  template.value.sources = template.value.sources.map(source => (
+    source.id === 'main-video'
+      ? { ...source, width: nextWidth, height: nextHeight }
+      : source
+  ))
+}
+
 function resetTemplate() {
   template.value = createDefaultTemplate()
   selectedLayerId.value = 'main-gameplay-crop'
   sourceInput.value = SAMPLE_VIDEO_SRC
   sourceVideoUrl.value = SAMPLE_VIDEO_SRC
   selectedFileName.value = ''
+  canvasMode.value = 'source'
   revokeLocalObjectUrl()
 }
 
@@ -559,7 +624,7 @@ select:focus {
 
 .source-toolbar {
   display: grid;
-  grid-template-columns: 180px minmax(220px, 1fr) 90px;
+  grid-template-columns: 180px minmax(220px, 1fr) auto 90px;
   align-items: end;
   gap: 10px;
   padding: 12px;
@@ -594,6 +659,35 @@ select:focus {
 
 .source-field.compact {
   width: 90px;
+}
+
+.mode-switch {
+  display: inline-flex;
+  gap: 5px;
+  align-self: end;
+  padding: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.mode-switch button {
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 9px 11px;
+  white-space: nowrap;
+}
+
+.mode-switch button.active {
+  color: #031214;
+  background: #67e8f9;
+  box-shadow: 0 0 20px rgba(34, 211, 238, 0.18);
 }
 
 .right-stack {

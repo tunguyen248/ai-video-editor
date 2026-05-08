@@ -26,13 +26,15 @@
       </div>
 
       <fieldset>
-        <legend>Source Rect</legend>
+        <legend>Source Box</legend>
         <div class="rect-grid">
           <label v-for="field in rectFields" :key="`source-${field}`">
             <span>{{ field }}</span>
             <input
               type="number"
               step="1"
+              :min="field === 'x' || field === 'y' ? 0 : 1"
+              :max="sourceMax(field)"
               :value="layer.sourceRect?.[field]"
               @input="updateRect('sourceRect', field, $event.target.value)"
             />
@@ -91,6 +93,10 @@ const props = defineProps({
     type: Object,
     default: () => ({ width: 1080, height: 1920 }),
   },
+  sourceSize: {
+    type: Object,
+    default: () => ({ width: 1920, height: 1080 }),
+  },
 })
 
 const emit = defineEmits(['update-layer'])
@@ -114,6 +120,11 @@ function updateRect(rectName, field, value) {
 function destinationMax(field) {
   if (field === 'x' || field === 'width') return props.outputSize?.width || 1080
   return props.outputSize?.height || 1920
+}
+
+function sourceMax(field) {
+  if (field === 'x' || field === 'width') return props.sourceSize?.width || 1920
+  return props.sourceSize?.height || 1080
 }
 </script>
 
